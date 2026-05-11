@@ -1,0 +1,19 @@
+{
+  "name": "TLM.TimelineController.Editor",
+  "rootNamespace": "TLM.TimelineController.Editor",
+  "references": [
+    "TLM.TimelineController",
+    "Unity.Timeline"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

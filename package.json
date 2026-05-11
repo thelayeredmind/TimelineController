@@ -1,0 +1,21 @@
+{
+  "name": "com.tlm.timeline-controller",
+  "version": "1.0.0",
+  "displayName": "Timeline Controller",
+  "description": "Runtime binding of Timeline tracks to cross-scene references, supporting additive scene authoring workflows. Forked and ported to Unity 6.x from carlself/timeline-controller.",
+  "unity": "6000.0",
+  "author": {
+    "name": "TLM"
+  },
+  "dependencies": {
+    "com.unity.timeline": "1.6.4",
+    "com.unity.modules.director": "1.0.0"
+  },
+  "samples": [
+    {
+      "displayName": "Basic Example",
+      "description": "Demonstrates runtime binding of Timeline tracks using cross-scene references.",
+      "path": "Samples~/Basic Example"
+    }
+  ]
+}
