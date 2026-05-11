@@ -25,7 +25,7 @@ public class NestedTimlineBinding
 }
 
 [RequireComponent(typeof(PlayableDirector))]
-[ExecuteInEditMode]
+[ExecuteAlways]
 public class TimelineController : MonoBehaviour
 {
     [SerializeField]
@@ -40,55 +40,54 @@ public class TimelineController : MonoBehaviour
 
 
 #if UNITY_EDITOR
-
     [NonSerialized]
     public bool ActiveInScene;
     public List<NestedTimlineBinding> NestedTimelineBindings
     {
         get { return nestedTimelineBindings; }
     }
-
     public static TimelineController LastActiveTimeline;
 
     void OnValidate()
     {
         playableDirector = GetComponent<PlayableDirector>();
     }
+#endif
 
     private void Awake()
     {
+#if UNITY_EDITOR
         if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewSceneObject(this))
-        {
             return;
-        }
+#endif
+        playableDirector = GetComponent<PlayableDirector>();
+        if (!Application.isPlaying)
+            InstallRuntimeBindings();
+    }
+
+    private void OnEnable()
+    {
+#if UNITY_EDITOR
         if (!EditorApplication.isPlaying)
         {
+            if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewSceneObject(this))
+                return;
+
+            // Re-establish active state after domain reloads — ActiveInScene is NonSerialized
+            // so it resets to false on every recompile, which previously caused Update() to bail.
             ActiveInScene = true;
-            if (LastActiveTimeline != null)
+            if (LastActiveTimeline != null && LastActiveTimeline != this)
             {
                 LastActiveTimeline.ActiveInScene = false;
                 LastActiveTimeline.gameObject.SetActive(false);
-                LastActiveTimeline = null;
             }
             LastActiveTimeline = this;
 
             playableDirector = GetComponent<PlayableDirector>();
-            Debug.Log("Editor causes this Awake");
             InstallRuntimeBindings();
-            enabled = true;
-        }
-        else
-        {
-            playableDirector = GetComponent<PlayableDirector>();
-            InstallRuntimeBindings();
-        }
-    }
-#endif
-
-    void OnEnable()
-    {
-        if (!Application.isPlaying)
             return;
+        }
+#endif
         playableDirector = GetComponent<PlayableDirector>();
         playableDirector.stopped += OnPlayableDirectorStopped;
     }
@@ -144,6 +143,7 @@ public class TimelineController : MonoBehaviour
 
         UpdateBindingList(playableDirector, trackBindings, false);
         UpdateNestedTimelineBindingList(playableDirector, nestedTimelineBindings);
+        InstallRuntimeBindings();
     }
 #endif
 
@@ -195,7 +195,8 @@ public class TimelineController : MonoBehaviour
 
         PrefabUtility.RecordPrefabInstancePropertyModifications(this);
 
-        trackBindings.Clear();
+        // Merge: only update an entry when a live binding exists — never clear a stored GUID
+        // just because the target scene is currently unloaded.
         for (int i = 0; i < timelineAsset.outputTrackCount; i++)
         {
             TrackAsset trackAsset = timelineAsset.GetOutputTrack(i);
@@ -215,30 +216,27 @@ public class TimelineController : MonoBehaviour
                 }
             }
 
-            TrackBinding trackBinding = null;
+            if (!hasOutput)
+                continue;
 
-            if (hasOutput)
-            {
-                var owner = playableDirector.GetGenericBinding(trackAsset) as GameObject;
-                var comp = playableDirector.GetGenericBinding(trackAsset) as Component;
-                if (comp != null)
-                    owner = comp.gameObject;
+            var owner = playableDirector.GetGenericBinding(trackAsset) as GameObject;
+            var comp = playableDirector.GetGenericBinding(trackAsset) as Component;
+            if (comp != null)
+                owner = comp.gameObject;
 
-                if (owner != null)
-                {
-                    // 如果binding的对象是子节点，不用动态绑定
-                    if (!includeChildObject && IsChildOf(owner.transform, playableDirector.transform))
-                        continue;
+            if (owner == null)
+                continue; // scene unloaded or binding not yet set — keep any stored GUID
 
-                    var guid = GetTimelineId(owner);
-                    trackBinding = new TrackBinding() { trackIndex = i, id = guid };
-                }
-            }
-            if (trackBinding != null)
-            {
-                trackBinding.trackIndex = i;
-                trackBindings.Add(trackBinding);
-            }
+            // 如果binding的对象是子节点，不用动态绑定
+            if (!includeChildObject && IsChildOf(owner.transform, playableDirector.transform))
+                continue;
+
+            var guid = GetTimelineId(owner);
+            var existing = trackBindings.FindIndex(b => b.trackIndex == i);
+            if (existing >= 0)
+                trackBindings[existing] = new TrackBinding() { trackIndex = i, id = guid };
+            else
+                trackBindings.Add(new TrackBinding() { trackIndex = i, id = guid });
         }
     }
 
