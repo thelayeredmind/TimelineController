@@ -35,8 +35,31 @@ Validated behaviour:
 - Unload a layered scene → GUIDs persist in `trackBindings`
 - Reload the scene → bindings restored automatically next `Update()` tick
 
+### Multi-Asset Support — One Director, Multiple Timelines
+
+Added `TimelineBindingData` ScriptableObject and `TimelineAssetEntry` list to support swapping multiple `TimelineAsset`s on a single `PlayableDirector` while preserving bindings per asset.
+
+**Architecture:**
+- `TimelineBindingData` SO — owns `trackBindings` + `nestedTimelineBindings` for one `TimelineAsset`. Embedded as a sub-asset inside its owning `.playable` file (visible as foldable child in Project browser)
+- `TimelineController` retains live flat lists (`trackBindings`, `nestedTimelineBindings`) as the active working set
+- `List<TimelineAssetEntry>` on the controller maps each `TimelineAsset` → its `TimelineBindingData` SO
+- `FlushBindingsToSO()` — mirrors live lists → SO (called every editor frame and before swap)
+- `LoadBindingsFromSO()` — copies SO → live lists (called after swap)
+- `SetTimeline(TimelineAsset)` — flush outgoing, swap asset, load incoming, install bindings, fire `OnTimelineChanged` event
+- `InstallRuntimeBindings()` always reads from live lists — no SO lookup at runtime
+
+**Editor navigator** (`TimelineControllerEditor`):
+- Flat button list of all registered timeline assets; active one shown as `[ Name ]` (disabled)
+- Clicking an inactive entry calls `SetTimeline` — both `director` and `timelineController` are `Undo.RecordObject`'d before the call and marked dirty after
+- **Add Current Asset** button — reads the director's current asset, creates a `BindingData` sub-asset embedded inside the `.playable` file via `AssetDatabase.AddObjectToAsset`, registers the pair
+- `✕` button removes an entry from the list
+
+**Key fix during validation:**
+- `Undo.RecordObject(timelineController)` must be called before `SetTimeline` modifies the live lists, otherwise Unity doesn't serialize the loaded bindings and they revert on next repaint/reload
+
 ## Future Plans
 
 - **Add to KOM project** — add `file:./Packages/timeline-controller` to `KitchenOfMemories_Unity6/Packages/manifest.json`
 - **Namespace cleanup** — all classes are currently in the global namespace; move to `TLM.TimelineController` namespace to avoid collisions in a multi-package project
 - **Remove Addressables dependency from Samples** — verify the `Samples~/Basic Example` scenes have no lingering Addressable references
+- **Nested BindingData as sub-asset** — already implemented for top-level assets; nested timeline bindings (`NestedTimlineBinding`) still live flat inside the parent `TimelineBindingData`
