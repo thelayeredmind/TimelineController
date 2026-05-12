@@ -24,6 +24,13 @@ public class NestedTimlineBinding
     public PlayableAsset timelineAsset;
 }
 
+[Serializable]
+public class TimelineAssetEntry
+{
+    public TimelineAsset timelineAsset;
+    public TimelineBindingData bindingData;
+}
+
 [RequireComponent(typeof(PlayableDirector))]
 [ExecuteAlways]
 public class TimelineController : MonoBehaviour
@@ -32,20 +39,20 @@ public class TimelineController : MonoBehaviour
     List<TrackBinding> trackBindings = new List<TrackBinding>();
     [SerializeField]
     List<NestedTimlineBinding> nestedTimelineBindings = new List<NestedTimlineBinding>();
+    [SerializeField]
+    List<TimelineAssetEntry> timelineEntries = new List<TimelineAssetEntry>();
+
     PlayableDirector playableDirector;
     Action onComplete;
-    // 运行时绑定对象
     Dictionary<string, GameObject> runtimeObjMap = new Dictionary<string, GameObject>();
     List<TimelineReference> timelineReferences = new List<TimelineReference>(10);
 
+    public event Action<TimelineAsset> OnTimelineChanged;
 
 #if UNITY_EDITOR
     [NonSerialized]
     public bool ActiveInScene;
-    public List<NestedTimlineBinding> NestedTimelineBindings
-    {
-        get { return nestedTimelineBindings; }
-    }
+    public List<TimelineAssetEntry> TimelineEntries => timelineEntries;
     public static TimelineController LastActiveTimeline;
 
     void OnValidate()
@@ -73,8 +80,6 @@ public class TimelineController : MonoBehaviour
             if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewSceneObject(this))
                 return;
 
-            // Re-establish active state after domain reloads — ActiveInScene is NonSerialized
-            // so it resets to false on every recompile, which previously caused Update() to bail.
             ActiveInScene = true;
             if (LastActiveTimeline != null && LastActiveTimeline != this)
             {
@@ -102,7 +107,6 @@ public class TimelineController : MonoBehaviour
         onComplete = null;
     }
 
-
     public void Play(Action onComplete)
     {
         InstallRuntimeBindings();
@@ -110,7 +114,52 @@ public class TimelineController : MonoBehaviour
         this.onComplete = onComplete;
     }
 
-    // 添加动态对象
+    public void SetTimeline(TimelineAsset asset)
+    {
+        FlushBindingsToSO(playableDirector.playableAsset as TimelineAsset);
+        playableDirector.playableAsset = asset;
+        LoadBindingsFromSO(asset);
+        InstallRuntimeBindings();
+        OnTimelineChanged?.Invoke(asset);
+    }
+
+    // Copies live lists → SO for the given asset (called before swap or on capture)
+    void FlushBindingsToSO(TimelineAsset asset)
+    {
+        if (asset == null) return;
+        var entry = timelineEntries.Find(e => e.timelineAsset == asset);
+        if (entry?.bindingData == null) return;
+
+        entry.bindingData.trackBindings.Clear();
+        foreach (var b in trackBindings)
+            entry.bindingData.trackBindings.Add(new TrackBinding { trackIndex = b.trackIndex, id = b.id });
+
+        entry.bindingData.nestedTimelineBindings.Clear();
+        foreach (var nb in nestedTimelineBindings)
+            entry.bindingData.nestedTimelineBindings.Add(nb);
+
+#if UNITY_EDITOR
+        UnityEditor.EditorUtility.SetDirty(entry.bindingData);
+#endif
+    }
+
+    // Copies SO → live lists for the given asset (called after swap)
+    void LoadBindingsFromSO(TimelineAsset asset)
+    {
+        trackBindings.Clear();
+        nestedTimelineBindings.Clear();
+        if (asset == null) return;
+
+        var entry = timelineEntries.Find(e => e.timelineAsset == asset);
+        if (entry?.bindingData == null) return;
+
+        foreach (var b in entry.bindingData.trackBindings)
+            trackBindings.Add(new TrackBinding { trackIndex = b.trackIndex, id = b.id });
+
+        foreach (var nb in entry.bindingData.nestedTimelineBindings)
+            nestedTimelineBindings.Add(nb);
+    }
+
     public void AddRuntimeObject(GameObject bindingObject)
     {
         timelineReferences.Clear();
@@ -119,17 +168,12 @@ public class TimelineController : MonoBehaviour
             return;
 
         foreach (var timelineRef in timelineReferences)
-        {
             runtimeObjMap.Add(timelineRef.Id, timelineRef.gameObject);
-        }
     }
 
-    void OnPlayableDirectorStopped(PlayableDirector playableDirector)
+    void OnPlayableDirectorStopped(PlayableDirector pd)
     {
-        if (onComplete != null)
-        {
-            onComplete();
-        }
+        onComplete?.Invoke();
     }
 
 #if UNITY_EDITOR
@@ -143,6 +187,7 @@ public class TimelineController : MonoBehaviour
 
         UpdateBindingList(playableDirector, trackBindings, false);
         UpdateNestedTimelineBindingList(playableDirector, nestedTimelineBindings);
+        FlushBindingsToSO(playableDirector.playableAsset as TimelineAsset);
         InstallRuntimeBindings();
     }
 #endif
@@ -180,36 +225,32 @@ public class TimelineController : MonoBehaviour
             if (!hasPrefab)
             {
                 timelineRef = owner.AddComponent<TimelineReference>();
-
                 UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(owner.scene);
             }
         }
         return timelineRef.Id;
     }
 
-    void UpdateBindingList(PlayableDirector playableDirector, List<TrackBinding> trackBindings, bool includeChildObject)
+    public void UpdateBindingList(PlayableDirector pd, List<TrackBinding> trackBindings, bool includeChildObject)
     {
-        var timelineAsset = playableDirector.playableAsset as TimelineAsset;
+        var timelineAsset = pd.playableAsset as TimelineAsset;
         if (timelineAsset == null)
             return;
 
         PrefabUtility.RecordPrefabInstancePropertyModifications(this);
 
-        // Merge: only update an entry when a live binding exists — never clear a stored GUID
-        // just because the target scene is currently unloaded.
         for (int i = 0; i < timelineAsset.outputTrackCount; i++)
         {
             TrackAsset trackAsset = timelineAsset.GetOutputTrack(i);
             if (trackAsset == null)
                 continue;
 
-            var outputs = trackAsset.outputs;
             bool hasOutput = false;
-            foreach (var output in outputs)
+            foreach (var output in trackAsset.outputs)
             {
-                if (output.outputTargetType == null || !typeof(UnityEngine.Object).IsAssignableFrom(output.outputTargetType) || output.sourceObject == null)
-                    continue;
-                else
+                if (output.outputTargetType != null &&
+                    typeof(UnityEngine.Object).IsAssignableFrom(output.outputTargetType) &&
+                    output.sourceObject != null)
                 {
                     hasOutput = true;
                     break;
@@ -219,16 +260,15 @@ public class TimelineController : MonoBehaviour
             if (!hasOutput)
                 continue;
 
-            var owner = playableDirector.GetGenericBinding(trackAsset) as GameObject;
-            var comp = playableDirector.GetGenericBinding(trackAsset) as Component;
+            var owner = pd.GetGenericBinding(trackAsset) as GameObject;
+            var comp = pd.GetGenericBinding(trackAsset) as Component;
             if (comp != null)
                 owner = comp.gameObject;
 
             if (owner == null)
-                continue; // scene unloaded or binding not yet set — keep any stored GUID
+                continue;
 
-            // 如果binding的对象是子节点，不用动态绑定
-            if (!includeChildObject && IsChildOf(owner.transform, playableDirector.transform))
+            if (!includeChildObject && IsChildOf(owner.transform, pd.transform))
                 continue;
 
             var guid = GetTimelineId(owner);
@@ -240,9 +280,9 @@ public class TimelineController : MonoBehaviour
         }
     }
 
-    void UpdateNestedTimelineBindingList(PlayableDirector playableDirector, List<NestedTimlineBinding> nestedTimelineBindings)
+    void UpdateNestedTimelineBindingList(PlayableDirector pd, List<NestedTimlineBinding> nestedTimelineBindings)
     {
-        var timelineAsset = playableDirector.playableAsset as TimelineAsset;
+        var timelineAsset = pd.playableAsset as TimelineAsset;
         if (timelineAsset == null)
             return;
 
@@ -260,7 +300,7 @@ public class TimelineController : MonoBehaviour
             {
                 clipIndex++;
                 ControlPlayableAsset playableAsset = (ControlPlayableAsset)clip.asset;
-                GameObject resolvedObj = playableAsset.sourceGameObject.Resolve(playableDirector);
+                GameObject resolvedObj = playableAsset.sourceGameObject.Resolve(pd);
                 if (resolvedObj == null)
                     continue;
 
@@ -268,7 +308,6 @@ public class TimelineController : MonoBehaviour
                 if (resolvedDirector == null)
                     continue;
 
-                // 如果binding的对象是子节点，不用动态绑定
                 if (IsChildOf(resolvedObj.transform, transform))
                     continue;
 
@@ -276,13 +315,12 @@ public class TimelineController : MonoBehaviour
                 if (timelineRef == null)
                 {
                     bool hasPrefab = false;
-
-                    GameObject resovledObjInPrefab = PrefabUtility.GetCorrespondingObjectFromOriginalSource(resolvedObj);
-                    if (resovledObjInPrefab != null)
+                    GameObject resolvedObjInPrefab = PrefabUtility.GetCorrespondingObjectFromOriginalSource(resolvedObj);
+                    if (resolvedObjInPrefab != null)
                     {
                         hasPrefab = true;
-                        timelineRef = resovledObjInPrefab.AddComponent<TimelineReference>();
-                        PrefabUtility.SavePrefabAsset(resovledObjInPrefab.transform.root.gameObject);
+                        timelineRef = resolvedObjInPrefab.AddComponent<TimelineReference>();
+                        PrefabUtility.SavePrefabAsset(resolvedObjInPrefab.transform.root.gameObject);
                     }
 
                     if (!hasPrefab)
@@ -292,18 +330,17 @@ public class TimelineController : MonoBehaviour
                     }
                 }
 
-                List<TrackBinding> trackBindings = new List<TrackBinding>();
-                UpdateBindingList(resolvedDirector, trackBindings, true);
+                List<TrackBinding> nestedTrackBindings = new List<TrackBinding>();
+                UpdateBindingList(resolvedDirector, nestedTrackBindings, true);
 
-                NestedTimlineBinding binding = new NestedTimlineBinding()
+                nestedTimelineBindings.Add(new NestedTimlineBinding()
                 {
                     trackIndex = trackIndex,
                     clipIndex = clipIndex,
                     id = timelineRef.Id,
                     timelineAsset = resolvedDirector.playableAsset,
-                    nestedTimelineTrackBindings = trackBindings,
-                };
-                nestedTimelineBindings.Add(binding);
+                    nestedTimelineTrackBindings = nestedTrackBindings,
+                });
             }
         }
     }
@@ -311,36 +348,29 @@ public class TimelineController : MonoBehaviour
 
     GameObject GetBindTarget(string id)
     {
-        // 首先获取动态对象
         if (runtimeObjMap.TryGetValue(id, out var bindTarget))
-        {
             return bindTarget;
-        }
 
-        List<GameObject> instances;
-        if (!TimelineReference.IdMap.TryGetValue(id, out instances))
+        if (!TimelineReference.IdMap.TryGetValue(id, out var instances))
             return null;
 
-        if (instances.Count == 0)
-            return null;
-
-        return instances[0];
+        return instances.Count == 0 ? null : instances[0];
     }
 
-    bool BindTrack(PlayableDirector playableDirector, TrackBinding binding)
+    bool BindTrack(PlayableDirector pd, TrackBinding binding)
     {
-        TimelineAsset timelineAsset = playableDirector.playableAsset as TimelineAsset;
+        TimelineAsset timelineAsset = pd.playableAsset as TimelineAsset;
 
         if (binding.trackIndex >= timelineAsset.outputTrackCount)
         {
             Debug.LogWarningFormat("trackIndex out of bounds:{0}, {1}", timelineAsset.ToString(), binding.trackIndex);
             return false;
         }
+
         TrackAsset trackAsset = timelineAsset.GetOutputTrack(binding.trackIndex);
 
         Type outputType = null;
-        var outputs = trackAsset.outputs;
-        foreach (var output in outputs)
+        foreach (var output in trackAsset.outputs)
         {
             outputType = output.outputTargetType;
             break;
@@ -355,7 +385,6 @@ public class TimelineController : MonoBehaviour
             return false;
 
         GameObject bindTarget = GetBindTarget(binding.id);
-
         if (bindTarget == null)
         {
             Debug.LogWarningFormat("Bind failed, didn't find bind object: {0}, {1}, {2}", timelineAsset.ToString(), trackAsset.ToString(), binding.id);
@@ -363,33 +392,24 @@ public class TimelineController : MonoBehaviour
         }
 
         UnityEngine.Object target = bindTarget;
-
         if (isComponent)
-        {
             target = bindTarget.GetComponent(outputType);
-        }
 
-        var oldBinding = playableDirector.GetGenericBinding(trackAsset);
+        var oldBinding = pd.GetGenericBinding(trackAsset);
         if (oldBinding != target)
-        {
-            playableDirector.SetGenericBinding(trackAsset, target);
-        }
+            pd.SetGenericBinding(trackAsset, target);
 
         return true;
     }
 
     public void InstallRuntimeBindings()
     {
-        // install main timeline bindings
         foreach (var entry in trackBindings)
         {
-            if (string.IsNullOrEmpty(entry.id))
-                continue;
-
-            BindTrack(playableDirector, entry);
+            if (!string.IsNullOrEmpty(entry.id))
+                BindTrack(playableDirector, entry);
         }
 
-        // install nested timeline binding
         for (int i = 0; i < nestedTimelineBindings.Count; i++)
         {
             NestedTimlineBinding entry = nestedTimelineBindings[i];
@@ -399,16 +419,16 @@ public class TimelineController : MonoBehaviour
             GameObject owner = GetBindTarget(entry.id);
             if (owner == null)
                 continue;
-            TimelineAsset timelineAsset = playableDirector.playableAsset as TimelineAsset;
 
-            int clipIndex = -1;
+            TimelineAsset timelineAsset = playableDirector.playableAsset as TimelineAsset;
             if (entry.trackIndex >= timelineAsset.outputTrackCount)
             {
                 Debug.LogWarningFormat("trackIndex out of bounds: {0}, {1}", timelineAsset.ToString(), entry.trackIndex);
                 continue;
             }
+
             TrackAsset trackAsset = timelineAsset.GetOutputTrack(entry.trackIndex);
-            clipIndex = -1;
+            int clipIndex = -1;
             ControlPlayableAsset clipAsset = null;
             foreach (var clip in trackAsset.GetClips())
             {
@@ -419,24 +439,21 @@ public class TimelineController : MonoBehaviour
                     break;
                 }
             }
-            playableDirector.SetReferenceValue(clipAsset.sourceGameObject.exposedName, owner);
-            PlayableDirector nestedPlayableDirector = owner.GetComponent<PlayableDirector>();
-            nestedPlayableDirector.playableAsset = entry.timelineAsset;
 
-            // nested timeline
+            playableDirector.SetReferenceValue(clipAsset.sourceGameObject.exposedName, owner);
+            PlayableDirector nestedDirector = owner.GetComponent<PlayableDirector>();
+            nestedDirector.playableAsset = entry.timelineAsset;
+
             foreach (var binding in entry.nestedTimelineTrackBindings)
             {
                 if (string.IsNullOrEmpty(binding.id))
-                {
-                    Debug.LogWarningFormat("Bind child timeline failed,empty id: {0}, {1}",
-                        nestedPlayableDirector.playableAsset.ToString(), playableDirector.playableAsset.ToString());
-                }
+                    Debug.LogWarningFormat("Bind child timeline failed, empty id: {0}, {1}",
+                        nestedDirector.playableAsset.ToString(), playableDirector.playableAsset.ToString());
                 else
-                {
-                    BindTrack(nestedPlayableDirector, binding);
-                }
+                    BindTrack(nestedDirector, binding);
             }
-            nestedPlayableDirector.RebuildGraph();
+
+            nestedDirector.RebuildGraph();
         }
     }
 }
