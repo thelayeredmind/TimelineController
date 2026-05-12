@@ -1,4 +1,3 @@
-using System.IO;
 using UnityEngine;
 using UnityEditor;
 using UnityEngine.Playables;
@@ -125,16 +124,11 @@ public class TimelineControllerEditor : Editor
 
     static TimelineBindingData CreateBindingDataAsset(TimelineAsset timelineAsset)
     {
-        string timelinePath = AssetDatabase.GetAssetPath(timelineAsset);
-        string dir = string.IsNullOrEmpty(timelinePath) ? "Assets" : Path.GetDirectoryName(timelinePath);
-        string assetName = $"{timelineAsset.name}_BindingData.asset";
-        string assetPath = AssetDatabase.GenerateUniqueAssetPath(Path.Combine(dir, assetName));
-
         var data = ScriptableObject.CreateInstance<TimelineBindingData>();
-        AssetDatabase.CreateAsset(data, assetPath);
+        data.name = "BindingData";
+        AssetDatabase.AddObjectToAsset(data, timelineAsset);
         AssetDatabase.SaveAssets();
-
-        Debug.Log($"[TimelineController] Created binding data: {assetPath}");
+        AssetDatabase.ImportAsset(AssetDatabase.GetAssetPath(timelineAsset));
         return data;
     }
 }
