@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
+namespace TLM.TimelineController
+{
 
 [ExecuteInEditMode]
 [DisallowMultipleComponent]
@@ -41,4 +43,5 @@ public class TimelineReference : MonoBehaviour
             }
         }
     }
+}
 }

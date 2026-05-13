@@ -1,9 +1,9 @@
 ﻿using System;
 using UnityEngine;
 
-
-[AttributeUsage(AttributeTargets.Field)]
-public class ShowAsReadOnlyAttribute : PropertyAttribute
+namespace TLM.TimelineController
 {
+    [AttributeUsage(AttributeTargets.Field)]
+    public class ShowAsReadOnlyAttribute : PropertyAttribute { }
 }
 

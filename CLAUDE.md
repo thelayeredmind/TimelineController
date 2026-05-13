@@ -72,5 +72,4 @@ When iterating bindings to update them, objects in unloaded additive scenes reso
 
 ## Future Plans
 
-- **Namespace cleanup** — all classes are currently in the global namespace; move to `TLM.TimelineController` namespace to avoid collisions in a multi-package project
-- **Remove Addressables dependency from Samples** — verify the `Samples~/Basic Example` scenes have no lingering Addressable references
+- **Nested BindingData as sub-asset** — nested timeline bindings (`NestedTimlineBinding`) still live flat inside the parent `TimelineBindingData`; could be embedded as sub-assets like the top-level ones

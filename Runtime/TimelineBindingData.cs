@@ -1,12 +1,14 @@
-using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Playables;
 using UnityEngine.Timeline;
 
-[CreateAssetMenu(fileName = "TimelineBindingData", menuName = "Timeline Controller/Timeline Binding Data")]
-public class TimelineBindingData : ScriptableObject
+namespace TLM.TimelineController
 {
-    public List<TrackBinding> trackBindings = new List<TrackBinding>();
-    public List<NestedTimlineBinding> nestedTimelineBindings = new List<NestedTimlineBinding>();
+    [CreateAssetMenu(fileName = "TimelineBindingData", menuName = "Timeline Controller/Timeline Binding Data")]
+    public class TimelineBindingData : ScriptableObject
+    {
+        public List<TrackBinding> trackBindings = new List<TrackBinding>();
+        public List<NestedTimlineBinding> nestedTimelineBindings = new List<NestedTimlineBinding>();
+    }
 }

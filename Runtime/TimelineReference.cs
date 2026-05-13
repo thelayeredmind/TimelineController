@@ -2,42 +2,41 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-
-[ExecuteAlways]
-[DisallowMultipleComponent]
-public class TimelineReference : MonoBehaviour
+namespace TLM.TimelineController
 {
-    public static readonly Dictionary<string, List<GameObject>> IdMap = new Dictionary<string, List<GameObject>>();
-
-    [SerializeField, ShowAsReadOnly]
-    public string Id = Guid.NewGuid().ToString();
-
-    void Awake()
+    [ExecuteAlways]
+    [DisallowMultipleComponent]
+    public class TimelineReference : MonoBehaviour
     {
-        Register();
-    }
+        public static readonly Dictionary<string, List<GameObject>> IdMap = new Dictionary<string, List<GameObject>>();
 
+        [SerializeField, ShowAsReadOnly]
+        public string Id = Guid.NewGuid().ToString();
 
-    void Register()
-    {
-        List<GameObject> instances;
-        if (!IdMap.TryGetValue(Id, out instances))
+        void Awake()
         {
-            instances = new List<GameObject>();
-            IdMap.Add(Id, instances);
+            Register();
         }
 
-        instances.Add(gameObject);
-    }
-
-    void OnDestroy()
-    {
-        if(IdMap.TryGetValue(Id, out var instances))
+        void Register()
         {
-            instances.Remove(gameObject);
-            if (instances.Count == 0)
+            List<GameObject> instances;
+            if (!IdMap.TryGetValue(Id, out instances))
             {
-                IdMap.Remove(Id);
+                instances = new List<GameObject>();
+                IdMap.Add(Id, instances);
+            }
+
+            instances.Add(gameObject);
+        }
+
+        void OnDestroy()
+        {
+            if (IdMap.TryGetValue(Id, out var instances))
+            {
+                instances.Remove(gameObject);
+                if (instances.Count == 0)
+                    IdMap.Remove(Id);
             }
         }
     }
