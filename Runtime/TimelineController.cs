@@ -36,6 +36,8 @@ public class TimelineAssetEntry
 public class TimelineController : MonoBehaviour
 {
     [SerializeField]
+    bool additiveSceneWorkflow = true;
+    [SerializeField]
     List<TrackBinding> trackBindings = new List<TrackBinding>();
     [SerializeField]
     List<NestedTimlineBinding> nestedTimelineBindings = new List<NestedTimlineBinding>();
@@ -266,7 +268,10 @@ public class TimelineController : MonoBehaviour
                 owner = comp.gameObject;
 
             if (owner == null)
+            {
+                MergeRule(trackBindings, i);
                 continue;
+            }
 
             if (!includeChildObject && IsChildOf(owner.transform, pd.transform))
                 continue;
@@ -286,8 +291,6 @@ public class TimelineController : MonoBehaviour
         if (timelineAsset == null)
             return;
 
-        nestedTimelineBindings.Clear();
-
         for (int trackIndex = 0; trackIndex < timelineAsset.outputTrackCount; trackIndex++)
         {
             TrackAsset trackAsset = timelineAsset.GetOutputTrack(trackIndex);
@@ -302,7 +305,10 @@ public class TimelineController : MonoBehaviour
                 ControlPlayableAsset playableAsset = (ControlPlayableAsset)clip.asset;
                 GameObject resolvedObj = playableAsset.sourceGameObject.Resolve(pd);
                 if (resolvedObj == null)
+                {
+                    MergeRule(nestedTimelineBindings, trackIndex, clipIndex);
                     continue;
+                }
 
                 PlayableDirector resolvedDirector = resolvedObj.GetComponent<PlayableDirector>();
                 if (resolvedDirector == null)
@@ -331,20 +337,47 @@ public class TimelineController : MonoBehaviour
                 }
 
                 List<TrackBinding> nestedTrackBindings = new List<TrackBinding>();
+                int existingIndex = nestedTimelineBindings.FindIndex(b => b.trackIndex == trackIndex && b.clipIndex == clipIndex);
+                if (existingIndex >= 0)
+                    nestedTrackBindings = nestedTimelineBindings[existingIndex].nestedTimelineTrackBindings;
+
                 UpdateBindingList(resolvedDirector, nestedTrackBindings, true);
 
-                nestedTimelineBindings.Add(new NestedTimlineBinding()
+                var entry = new NestedTimlineBinding()
                 {
                     trackIndex = trackIndex,
                     clipIndex = clipIndex,
                     id = timelineRef.Id,
                     timelineAsset = resolvedDirector.playableAsset,
                     nestedTimelineTrackBindings = nestedTrackBindings,
-                });
+                };
+
+                if (existingIndex >= 0)
+                    nestedTimelineBindings[existingIndex] = entry;
+                else
+                    nestedTimelineBindings.Add(entry);
             }
         }
     }
 #endif
+
+    void MergeRule(List<TrackBinding> list, int trackIndex)
+    {
+        if (!additiveSceneWorkflow)
+        {
+            var stale = list.FindIndex(b => b.trackIndex == trackIndex);
+            if (stale >= 0) list.RemoveAt(stale);
+        }
+    }
+
+    void MergeRule(List<NestedTimlineBinding> list, int trackIndex, int clipIndex)
+    {
+        if (!additiveSceneWorkflow)
+        {
+            var stale = list.FindIndex(b => b.trackIndex == trackIndex && b.clipIndex == clipIndex);
+            if (stale >= 0) list.RemoveAt(stale);
+        }
+    }
 
     GameObject GetBindTarget(string id)
     {

@@ -57,9 +57,20 @@ Added `TimelineBindingData` ScriptableObject and `TimelineAssetEntry` list to su
 **Key fix during validation:**
 - `Undo.RecordObject(timelineController)` must be called before `SetTimeline` modifies the live lists, otherwise Unity doesn't serialize the loaded bindings and they revert on next repaint/reload
 
+### MergeRule Pattern
+
+When iterating bindings to update them, objects in unloaded additive scenes resolve to `null`. The rule for what to do with a stale entry is encapsulated in `MergeRule()` overloads — one for `TrackBinding`, one for `NestedTimlineBinding`. They read `additiveSceneWorkflow` (default `true`) on `TimelineController`:
+
+- `true` — skip the unresolvable entry, preserve the stored GUID (binding restores when the scene reloads)
+- `false` — remove the stale entry (classic rebuild behavior)
+
+**Apply this pattern whenever a new update loop is added** that iterates bindings and might encounter unloaded-scene nulls. Always call `MergeRule(list, ...)` at the null-check site and `continue` — never inline the remove/skip logic at the call site.
+
+### Control Track Clip Reference Fix
+
+`UpdateNestedTimelineBindingList` originally called `nestedTimelineBindings.Clear()` at the top of every frame — same bug as the earlier `trackBindings` fix. When a layered scene is unloaded, `sourceGameObject.Resolve()` returns `null`, the entry is skipped, and the `Clear()` wiped the stored GUID. Fixed with the same merge strategy: removed the `Clear()`, find entry by `trackIndex`+`clipIndex`, update in place when live, call `MergeRule` when null.
+
 ## Future Plans
 
-- **Add to KOM project** — add `file:./Packages/timeline-controller` to `KitchenOfMemories_Unity6/Packages/manifest.json`
 - **Namespace cleanup** — all classes are currently in the global namespace; move to `TLM.TimelineController` namespace to avoid collisions in a multi-package project
 - **Remove Addressables dependency from Samples** — verify the `Samples~/Basic Example` scenes have no lingering Addressable references
-- **Nested BindingData as sub-asset** — already implemented for top-level assets; nested timeline bindings (`NestedTimlineBinding`) still live flat inside the parent `TimelineBindingData`
