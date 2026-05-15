@@ -26,25 +26,6 @@ namespace TLM.TimelineController
                 return;
             }
 
-            // --- Active toggle ---
-            EditorGUI.BeginChangeCheck();
-            timelineController.ActiveInScene = EditorGUILayout.Toggle("Activate", timelineController.ActiveInScene, GUILayout.MinWidth(50f));
-            if (EditorGUI.EndChangeCheck())
-            {
-                timelineController.gameObject.SetActive(timelineController.ActiveInScene);
-                if (timelineController.ActiveInScene)
-                {
-                    if (TimelineController.LastActiveTimeline != null && TimelineController.LastActiveTimeline != timelineController)
-                    {
-                        TimelineController.LastActiveTimeline.ActiveInScene = false;
-                        TimelineController.LastActiveTimeline.gameObject.SetActive(false);
-                        TimelineController.LastActiveTimeline = null;
-                    }
-                    TimelineController.LastActiveTimeline = timelineController;
-                    timelineController.InstallRuntimeBindings();
-                }
-            }
-
             EditorGUILayout.Space();
 
             // --- Timeline entry navigator ---

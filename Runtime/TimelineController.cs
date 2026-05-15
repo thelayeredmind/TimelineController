@@ -57,7 +57,6 @@ namespace TLM.TimelineController
         [NonSerialized]
         public bool ActiveInScene;
         public List<TimelineAssetEntry> TimelineEntries => timelineEntries;
-        public static TimelineController LastActiveTimeline;
 
         void OnValidate()
         {
@@ -85,13 +84,6 @@ namespace TLM.TimelineController
                     return;
 
                 ActiveInScene = true;
-                if (LastActiveTimeline != null && LastActiveTimeline != this)
-                {
-                    LastActiveTimeline.ActiveInScene = false;
-                    LastActiveTimeline.gameObject.SetActive(false);
-                }
-                LastActiveTimeline = this;
-
                 playableDirector = GetComponent<PlayableDirector>();
                 InstallRuntimeBindings();
                 return;

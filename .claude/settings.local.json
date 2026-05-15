@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__unity-mcp__unity_list_instances",
+      "mcp__unity-mcp__unity_get_compilation_errors",
+      "mcp__unity-mcp__unity_execute_menu_item"
+    ]
+  }
+}
