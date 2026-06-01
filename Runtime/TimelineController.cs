@@ -53,7 +53,8 @@ namespace TLM.TimelineController
         int _lastNestedBindingCount = -1;
 #if UNITY_EDITOR
         // Non-serialized — rebuilt each capture pass. If layout shifts, Update detects drift and resets.
-        readonly HashSet<int> _selfTrackIndices = new HashSet<int>();
+        // Untracked: self-referencing or unbound tracks not written to trackBindings. GroupTrack is invisible to GetOutputTrack.
+        readonly HashSet<int> _untrackedTrackIndices = new HashSet<int>();
         readonly HashSet<(int track, int clip)> _selfClipIndices = new HashSet<(int, int)>();
 #endif
 
@@ -210,7 +211,7 @@ namespace TLM.TimelineController
             if (!ActiveInScene)
                 return;
 
-            if (SelfReferenceLayoutDrifted())
+            if (LayoutDrifted())
             {
                 ResetActiveBindings();
                 return;
@@ -271,7 +272,7 @@ namespace TLM.TimelineController
             PrefabUtility.RecordPrefabInstancePropertyModifications(this);
 
             if (!includeChildObject)
-                _selfTrackIndices.Clear();
+                _untrackedTrackIndices.Clear();
 
             for (int i = 0; i < timelineAsset.outputTrackCount; i++)
             {
@@ -279,24 +280,23 @@ namespace TLM.TimelineController
                 if (trackAsset == null)
                     continue;
 
-                // GroupTrack is a container with no binding — skip it.
-                if (trackAsset is GroupTrack)
-                    continue;
-
-                var owner = pd.GetGenericBinding(trackAsset) as GameObject;
-                var comp = pd.GetGenericBinding(trackAsset) as Component;
+                var binding = pd.GetGenericBinding(trackAsset);
+                var owner = binding as GameObject;
+                var comp = binding as Component;
                 if (comp != null)
                     owner = comp.gameObject;
 
                 if (owner == null)
                 {
+                    if (!includeChildObject)
+                        _untrackedTrackIndices.Add(i);
                     MergeRule(trackBindings, i);
                     continue;
                 }
 
                 if (!includeChildObject && IsChildOf(owner.transform, pd.transform))
                 {
-                    _selfTrackIndices.Add(i);
+                    _untrackedTrackIndices.Add(i);
                     continue;
                 }
 
@@ -392,23 +392,27 @@ namespace TLM.TimelineController
         }
 #endif
 
-        // Returns true if any previously recorded self-referencing track or clip no longer resolves to self.
-        // A layout change (reorder, add, remove) shifts indices and makes stored bindings invalid.
-        bool SelfReferenceLayoutDrifted()
+        // Returns true if the set of untracked track indices has changed since the last capture pass.
+        // Any layout change (reorder, add, remove of a GroupTrack, self-ref, or unbound track) shifts indices.
+        bool LayoutDrifted()
         {
             var timelineAsset = playableDirector.playableAsset as TimelineAsset;
             if (timelineAsset == null) return false;
 
-            foreach (int trackIndex in _selfTrackIndices)
+            // Recompute untracked set from current timeline state and compare against stored.
+            var current = new HashSet<int>();
+            for (int i = 0; i < timelineAsset.outputTrackCount; i++)
             {
-                if (trackIndex >= timelineAsset.outputTrackCount) return true;
-                var binding = playableDirector.GetGenericBinding(timelineAsset.GetOutputTrack(trackIndex));
+                var trackAsset = timelineAsset.GetOutputTrack(i);
+                if (trackAsset == null) continue;
+                var binding = playableDirector.GetGenericBinding(trackAsset);
                 var owner = binding as GameObject;
                 var comp = binding as Component;
                 if (comp != null) owner = comp.gameObject;
-                if (owner == null) return true;
-                if (!IsChildOf(owner.transform, transform)) return true;
+                if (owner == null || IsChildOf(owner.transform, transform))
+                    current.Add(i);
             }
+            if (!current.SetEquals(_untrackedTrackIndices)) return true;
 
             foreach (var (trackIndex, clipIndex) in _selfClipIndices)
             {
