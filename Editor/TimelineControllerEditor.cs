@@ -92,6 +92,27 @@ namespace TLM.TimelineController
 
             EditorGUILayout.Space();
 
+            // --- Reset bindings ---
+            var prevColor = GUI.backgroundColor;
+            GUI.backgroundColor = new Color(1f, 0.35f, 0.35f);
+            if (GUILayout.Button("Reset Bindings for Current Timeline"))
+            {
+                GUI.backgroundColor = prevColor;
+                var asset = director.playableAsset as TimelineAsset;
+                string assetName = asset != null ? asset.name : "(none)";
+                if (EditorUtility.DisplayDialog(
+                    "Reset Bindings",
+                    $"This will clear and re-capture all bindings for \"{assetName}\" from the current scene state. Stale entries will be discarded.\n\nThis cannot be undone.",
+                    "Reset", "Cancel"))
+                {
+                    Undo.RecordObject(timelineController, "Reset Timeline Bindings");
+                    timelineController.ResetActiveBindings();
+                }
+            }
+            GUI.backgroundColor = prevColor;
+
+            EditorGUILayout.Space();
+
             // --- Save prefab overrides ---
             GameObject prefab = PrefabUtility.GetCorrespondingObjectFromOriginalSource(timelineController.gameObject);
             if (prefab && PrefabUtility.HasPrefabInstanceAnyOverrides(timelineController.gameObject, false))

@@ -50,6 +50,7 @@ namespace TLM.TimelineController
         Action onComplete;
         Dictionary<string, GameObject> runtimeObjMap = new Dictionary<string, GameObject>();
         List<TimelineReference> timelineReferences = new List<TimelineReference>(10);
+        int _lastNestedBindingCount = -1;
 
         public event Action<TimelineAsset> OnTimelineChanged;
 
@@ -173,6 +174,29 @@ namespace TLM.TimelineController
         }
 
 #if UNITY_EDITOR
+        public void ResetActiveBindings()
+        {
+            var asset = playableDirector.playableAsset as TimelineAsset;
+
+            trackBindings.Clear();
+            nestedTimelineBindings.Clear();
+
+            var entry = timelineEntries.Find(e => e.timelineAsset == asset);
+            if (entry?.bindingData != null)
+            {
+                entry.bindingData.trackBindings.Clear();
+                entry.bindingData.nestedTimelineBindings.Clear();
+                EditorUtility.SetDirty(entry.bindingData);
+            }
+
+            UpdateBindingList(playableDirector, trackBindings, false);
+            UpdateNestedTimelineBindingList(playableDirector, nestedTimelineBindings);
+            FlushBindingsToSO(asset);
+            InstallRuntimeBindings();
+
+            EditorUtility.SetDirty(this);
+        }
+
         void Update()
         {
             if (Application.isPlaying)
@@ -298,10 +322,14 @@ namespace TLM.TimelineController
                     clipIndex++;
                     ControlPlayableAsset playableAsset = (ControlPlayableAsset)clip.asset;
                     GameObject resolvedObj = playableAsset.sourceGameObject.Resolve(pd);
-                    if (resolvedObj == null)
+
+                    switch (ClassifyNestedOwner(resolvedObj))
                     {
-                        MergeRule(nestedTimelineBindings, trackIndex, clipIndex);
-                        continue;
+                        case NestedOwnerResolution.Missing:
+                            MergeRule(nestedTimelineBindings, trackIndex, clipIndex);
+                            continue;
+                        case NestedOwnerResolution.Self:
+                            continue;
                     }
 
                     PlayableDirector resolvedDirector = resolvedObj.GetComponent<PlayableDirector>();
@@ -354,6 +382,26 @@ namespace TLM.TimelineController
             }
         }
 #endif
+
+        enum NestedOwnerResolution { Missing, Self, Resolved }
+
+        // Resolves a nested owner from the IdMap (install path).
+        // Self means the owner is this GameObject — always present, Unity handles it natively.
+        NestedOwnerResolution ResolveNestedOwner(string id, out GameObject owner)
+        {
+            owner = GetBindTarget(id);
+            if (owner == null) return NestedOwnerResolution.Missing;
+            if (owner == gameObject) return NestedOwnerResolution.Self;
+            return NestedOwnerResolution.Resolved;
+        }
+
+        // Classifies an already-resolved GameObject (capture path).
+        NestedOwnerResolution ClassifyNestedOwner(GameObject resolvedObj)
+        {
+            if (resolvedObj == null) return NestedOwnerResolution.Missing;
+            if (resolvedObj == gameObject) return NestedOwnerResolution.Self;
+            return NestedOwnerResolution.Resolved;
+        }
 
         void MergeRule(List<TrackBinding> list, int trackIndex)
         {
@@ -433,8 +481,21 @@ namespace TLM.TimelineController
         {
             foreach (var entry in trackBindings)
             {
-                if (!string.IsNullOrEmpty(entry.id))
-                    BindTrack(playableDirector, entry);
+                if (string.IsNullOrEmpty(entry.id))
+                    continue;
+                if (ResolveNestedOwner(entry.id, out _) == NestedOwnerResolution.Self)
+                    continue;
+                BindTrack(playableDirector, entry);
+            }
+
+            if (nestedTimelineBindings.Count != _lastNestedBindingCount)
+            {
+                _lastNestedBindingCount = nestedTimelineBindings.Count;
+                var sb = new System.Text.StringBuilder();
+                sb.AppendFormat("[TC] nestedTimelineBindings count changed to {0}:\n", nestedTimelineBindings.Count);
+                foreach (var b in nestedTimelineBindings)
+                    sb.AppendFormat("  track={0} clip={1} id={2} asset={3}\n", b.trackIndex, b.clipIndex, b.id, b.timelineAsset);
+                Debug.Log(sb.ToString());
             }
 
             for (int i = 0; i < nestedTimelineBindings.Count; i++)
@@ -443,8 +504,10 @@ namespace TLM.TimelineController
                 if (entry.timelineAsset == null || string.IsNullOrEmpty(entry.id))
                     continue;
 
-                GameObject owner = GetBindTarget(entry.id);
-                if (owner == null)
+                var resolution = ResolveNestedOwner(entry.id, out GameObject owner);
+                if (resolution == NestedOwnerResolution.Self)
+                    Debug.LogWarningFormat("[TC] Self entry survived to install — track={0} clip={1} id={2}", entry.trackIndex, entry.clipIndex, entry.id);
+                if (resolution != NestedOwnerResolution.Resolved)
                     continue;
 
                 TimelineAsset timelineAsset = playableDirector.playableAsset as TimelineAsset;
@@ -465,6 +528,12 @@ namespace TLM.TimelineController
                         clipAsset = clip.asset as ControlPlayableAsset;
                         break;
                     }
+                }
+
+                if (clipAsset == null)
+                {
+                    Debug.LogWarningFormat("NestedTimeline: no ControlPlayableAsset at track {0} clip {1} in {2}", entry.trackIndex, entry.clipIndex, timelineAsset);
+                    continue;
                 }
 
                 playableDirector.SetReferenceValue(clipAsset.sourceGameObject.exposedName, owner);
