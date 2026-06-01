@@ -51,6 +51,11 @@ namespace TLM.TimelineController
         Dictionary<string, GameObject> runtimeObjMap = new Dictionary<string, GameObject>();
         List<TimelineReference> timelineReferences = new List<TimelineReference>(10);
         int _lastNestedBindingCount = -1;
+#if UNITY_EDITOR
+        // Non-serialized — rebuilt each capture pass. If layout shifts, Update detects drift and resets.
+        readonly HashSet<int> _selfTrackIndices = new HashSet<int>();
+        readonly HashSet<(int track, int clip)> _selfClipIndices = new HashSet<(int, int)>();
+#endif
 
         public event Action<TimelineAsset> OnTimelineChanged;
 
@@ -205,6 +210,12 @@ namespace TLM.TimelineController
             if (!ActiveInScene)
                 return;
 
+            if (SelfReferenceLayoutDrifted())
+            {
+                ResetActiveBindings();
+                return;
+            }
+
             UpdateBindingList(playableDirector, trackBindings, false);
             UpdateNestedTimelineBindingList(playableDirector, nestedTimelineBindings);
             FlushBindingsToSO(playableDirector.playableAsset as TimelineAsset);
@@ -259,6 +270,9 @@ namespace TLM.TimelineController
 
             PrefabUtility.RecordPrefabInstancePropertyModifications(this);
 
+            if (!includeChildObject)
+                _selfTrackIndices.Clear();
+
             for (int i = 0; i < timelineAsset.outputTrackCount; i++)
             {
                 TrackAsset trackAsset = timelineAsset.GetOutputTrack(i);
@@ -292,7 +306,10 @@ namespace TLM.TimelineController
                 }
 
                 if (!includeChildObject && IsChildOf(owner.transform, pd.transform))
+                {
+                    _selfTrackIndices.Add(i);
                     continue;
+                }
 
                 var guid = GetTimelineId(owner);
                 var existing = trackBindings.FindIndex(b => b.trackIndex == i);
@@ -308,6 +325,8 @@ namespace TLM.TimelineController
             var timelineAsset = pd.playableAsset as TimelineAsset;
             if (timelineAsset == null)
                 return;
+
+            _selfClipIndices.Clear();
 
             for (int trackIndex = 0; trackIndex < timelineAsset.outputTrackCount; trackIndex++)
             {
@@ -329,6 +348,7 @@ namespace TLM.TimelineController
                             MergeRule(nestedTimelineBindings, trackIndex, clipIndex);
                             continue;
                         case NestedOwnerResolution.Self:
+                            _selfClipIndices.Add((trackIndex, clipIndex));
                             continue;
                     }
 
@@ -382,6 +402,44 @@ namespace TLM.TimelineController
             }
         }
 #endif
+
+        // Returns true if any previously recorded self-referencing track or clip no longer resolves to self.
+        // A layout change (reorder, add, remove) shifts indices and makes stored bindings invalid.
+        bool SelfReferenceLayoutDrifted()
+        {
+            var timelineAsset = playableDirector.playableAsset as TimelineAsset;
+            if (timelineAsset == null) return false;
+
+            foreach (int trackIndex in _selfTrackIndices)
+            {
+                if (trackIndex >= timelineAsset.outputTrackCount) return true;
+                var owner = playableDirector.GetGenericBinding(timelineAsset.GetOutputTrack(trackIndex)) as GameObject;
+                if (owner == null) return true;
+                var comp = playableDirector.GetGenericBinding(timelineAsset.GetOutputTrack(trackIndex)) as Component;
+                if (comp != null) owner = comp.gameObject;
+                if (!IsChildOf(owner.transform, transform)) return true;
+            }
+
+            foreach (var (trackIndex, clipIndex) in _selfClipIndices)
+            {
+                if (trackIndex >= timelineAsset.outputTrackCount) return true;
+                var controlTrack = timelineAsset.GetOutputTrack(trackIndex) as ControlTrack;
+                if (controlTrack == null) return true;
+                int ci = -1;
+                foreach (var clip in controlTrack.GetClips())
+                {
+                    ci++;
+                    if (ci == clipIndex)
+                    {
+                        var resolved = (clip.asset as ControlPlayableAsset)?.sourceGameObject.Resolve(playableDirector);
+                        if (ClassifyNestedOwner(resolved) != NestedOwnerResolution.Self) return true;
+                        break;
+                    }
+                }
+            }
+
+            return false;
+        }
 
         enum NestedOwnerResolution { Missing, Self, Resolved }
 
