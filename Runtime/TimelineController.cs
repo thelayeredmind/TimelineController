@@ -279,19 +279,8 @@ namespace TLM.TimelineController
                 if (trackAsset == null)
                     continue;
 
-                bool hasOutput = false;
-                foreach (var output in trackAsset.outputs)
-                {
-                    if (output.outputTargetType != null &&
-                        typeof(UnityEngine.Object).IsAssignableFrom(output.outputTargetType) &&
-                        output.sourceObject != null)
-                    {
-                        hasOutput = true;
-                        break;
-                    }
-                }
-
-                if (!hasOutput)
+                // GroupTrack is a container with no binding — skip it.
+                if (trackAsset is GroupTrack)
                     continue;
 
                 var owner = pd.GetGenericBinding(trackAsset) as GameObject;
@@ -413,10 +402,11 @@ namespace TLM.TimelineController
             foreach (int trackIndex in _selfTrackIndices)
             {
                 if (trackIndex >= timelineAsset.outputTrackCount) return true;
-                var owner = playableDirector.GetGenericBinding(timelineAsset.GetOutputTrack(trackIndex)) as GameObject;
-                if (owner == null) return true;
-                var comp = playableDirector.GetGenericBinding(timelineAsset.GetOutputTrack(trackIndex)) as Component;
+                var binding = playableDirector.GetGenericBinding(timelineAsset.GetOutputTrack(trackIndex));
+                var owner = binding as GameObject;
+                var comp = binding as Component;
                 if (comp != null) owner = comp.gameObject;
+                if (owner == null) return true;
                 if (!IsChildOf(owner.transform, transform)) return true;
             }
 
