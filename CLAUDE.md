@@ -80,8 +80,21 @@ The resolution outcome is encapsulated in `NestedOwnerResolution` (`Missing` / `
 
 `ResetActiveBindings()` (#if UNITY_EDITOR) clears the live lists and the active timeline's `BindingData` SO, then immediately re-captures from the current scene state. Exposed as a red button in the Inspector. Use this whenever the timeline's track layout changes and stored indices go stale.
 
+## Unity API Invariants
+
+These are permanent behavioural facts about Unity's Timeline API that must be kept in mind when working on this package.
+
+### `GetOutputTrack` flat index ordering
+`GetOutputTrack(i)` skips `GroupTrack` entirely but appends subtracks *after* all root-level tracks — not inline at their visual position in the Timeline window. Index order is: all root bindable tracks first, then subtracks grouped by parent. Both capture and install must use the same API so indices remain consistent. A reorder or group move changes indices globally — any stored index is stale after such an operation.
+
+### `MarkerTrack` returns a spurious binding
+`GetGenericBinding` on a `MarkerTrack` returns a non-null object even when the binding field is visually empty in the Timeline window. It must be explicitly skipped in any binding capture loop — it is never a valid cross-scene binding target.
+
+### `TimelineReference.IdMap` is wiped on domain reload
+`IdMap` is a static field — it is reset to empty on every domain reload. `Awake` only fires for objects whose scene was loaded or reloaded after the reload, so objects in always-loaded scenes (e.g. Bootstrap) never re-register via `Awake` alone. `OnEnable` must also call `Register()` since it fires on domain reload for `[ExecuteAlways]` components in already-loaded scenes. `Register()` must guard against duplicate entries.
+
 ## Future Plans
 
 - **Nested BindingData as sub-asset** — nested timeline bindings (`NestedTimlineBinding`) still live flat inside the parent `TimelineBindingData`; could be embedded as sub-assets like the top-level ones
-- **Subtrack support** — grouped/child tracks are not reachable via `GetOutputTrack`; would need recursive `GetChildTracks()` traversal and a path-based index scheme
-- **Track index invalidation detection** — reordering tracks silently corrupts stored indices; storing track name/type alongside the index would allow a sanity check
+- **Subtrack support** — subtracks inside groups are reachable via `GetOutputTrack` but their indices are appended after all root tracks, not at their visual position; a path-based scheme (group index + child index) would be more stable
+- **Track index invalidation detection** — reordering tracks changes stored indices silently; storing track name/type alongside the index would allow a sanity check at install time

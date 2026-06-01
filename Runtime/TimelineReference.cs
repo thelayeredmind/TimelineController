@@ -18,16 +18,21 @@ namespace TLM.TimelineController
             Register();
         }
 
+        void OnEnable()
+        {
+            Register();
+        }
+
         void Register()
         {
-            List<GameObject> instances;
-            if (!IdMap.TryGetValue(Id, out instances))
+            if (!IdMap.TryGetValue(Id, out var instances))
             {
                 instances = new List<GameObject>();
                 IdMap.Add(Id, instances);
             }
 
-            instances.Add(gameObject);
+            if (!instances.Contains(gameObject))
+                instances.Add(gameObject);
         }
 
         void OnDestroy()
