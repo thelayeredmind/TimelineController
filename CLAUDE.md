@@ -70,6 +70,18 @@ When iterating bindings to update them, objects in unloaded additive scenes reso
 
 `UpdateNestedTimelineBindingList` originally called `nestedTimelineBindings.Clear()` at the top of every frame — same bug as the earlier `trackBindings` fix. When a layered scene is unloaded, `sourceGameObject.Resolve()` returns `null`, the entry is skipped, and the `Clear()` wiped the stored GUID. Fixed with the same merge strategy: removed the `Clear()`, find entry by `trackIndex`+`clipIndex`, update in place when live, call `MergeRule` when null.
 
+### Self-Targeting Binding Rule
+
+Tracks or clips whose bound object is the `TimelineController`'s own GameObject must never be written into `trackBindings` or `nestedTimelineBindings`. The loop index still advances past them (index counting is unaffected), but no entry is stored — Unity handles those bindings natively.
+
+The resolution outcome is encapsulated in `NestedOwnerResolution` (`Missing` / `Self` / `Resolved`). Use `ClassifyNestedOwner()` at capture and `ResolveNestedOwner()` at install. Never add inline `== gameObject` checks outside these two methods.
+
+### Reset Bindings
+
+`ResetActiveBindings()` (#if UNITY_EDITOR) clears the live lists and the active timeline's `BindingData` SO, then immediately re-captures from the current scene state. Exposed as a red button in the Inspector. Use this whenever the timeline's track layout changes and stored indices go stale.
+
 ## Future Plans
 
 - **Nested BindingData as sub-asset** — nested timeline bindings (`NestedTimlineBinding`) still live flat inside the parent `TimelineBindingData`; could be embedded as sub-assets like the top-level ones
+- **Subtrack support** — grouped/child tracks are not reachable via `GetOutputTrack`; would need recursive `GetChildTracks()` traversal and a path-based index scheme
+- **Track index invalidation detection** — reordering tracks silently corrupts stored indices; storing track name/type alongside the index would allow a sanity check
