@@ -253,6 +253,11 @@ namespace TLM.TimelineController
                         sb.AppendLine("  " + kind + " id=" + assetEvent.instanceId + " watched=" + watchedIds.Contains(assetEvent.instanceId));
                         if (watchedIds.Contains(assetEvent.instanceId)) { _bindingsDirty = true; Debug.Log(sb + "  → dirty"); return; }
                         break;
+                    case ObjectChangeKind.ChangeScene:
+                        sb.AppendLine("  " + kind + " → dirty");
+                        _bindingsDirty = true;
+                        Debug.Log(sb.ToString());
+                        return;
                     default:
                         sb.AppendLine("  " + kind + " (no id extracted)");
                         break;
@@ -266,16 +271,16 @@ namespace TLM.TimelineController
         {
             var asset = playableDirector.playableAsset as TimelineAsset;
 
-            trackBindings.Clear();
-            nestedTimelineBindings.Clear();
-
+            // Clear SO first so no stale data survives a serialization reload mid-reset.
             var entry = timelineEntries.Find(e => e.timelineAsset == asset);
             if (entry?.bindingData != null)
             {
                 entry.bindingData.trackBindings.Clear();
                 entry.bindingData.nestedTimelineBindings.Clear();
-                EditorUtility.SetDirty(entry.bindingData);
             }
+
+            trackBindings.Clear();
+            nestedTimelineBindings.Clear();
 
             UpdateBindingList(playableDirector, trackBindings, false);
             UpdateNestedTimelineBindingList(playableDirector, nestedTimelineBindings);
@@ -283,6 +288,8 @@ namespace TLM.TimelineController
             InstallRuntimeBindings();
 
             EditorUtility.SetDirty(this);
+            if (entry?.bindingData != null)
+                EditorUtility.SetDirty(entry.bindingData);
         }
 
         void Update()
