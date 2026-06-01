@@ -52,10 +52,9 @@ namespace TLM.TimelineController
         List<TimelineReference> timelineReferences = new List<TimelineReference>(10);
         int _lastNestedBindingCount = -1;
 #if UNITY_EDITOR
-        // Non-serialized — rebuilt each capture pass. If layout shifts, Update detects drift and resets.
-        // Untracked: self-referencing or unbound tracks not written to trackBindings. GroupTrack is invisible to GetOutputTrack.
-        readonly HashSet<int> _untrackedTrackIndices = new HashSet<int>();
+        // Non-serialized — rebuilt each capture pass.
         readonly HashSet<(int track, int clip)> _selfClipIndices = new HashSet<(int, int)>();
+        bool _bindingsDirty = true;
 #endif
 
         public event Action<TimelineAsset> OnTimelineChanged;
@@ -92,6 +91,8 @@ namespace TLM.TimelineController
 
                 ActiveInScene = true;
                 playableDirector = GetComponent<PlayableDirector>();
+                ObjectChangeEvents.changesPublished += OnObjectChangesPublished;
+                _bindingsDirty = true;
                 InstallRuntimeBindings();
                 return;
             }
@@ -102,6 +103,10 @@ namespace TLM.TimelineController
 
         private void OnDisable()
         {
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+                ObjectChangeEvents.changesPublished -= OnObjectChangesPublished;
+#endif
             if (!Application.isPlaying)
                 return;
 
@@ -122,6 +127,9 @@ namespace TLM.TimelineController
             FlushBindingsToSO(playableDirector.playableAsset as TimelineAsset);
             playableDirector.playableAsset = asset;
             LoadBindingsFromSO(asset);
+#if UNITY_EDITOR
+            _bindingsDirty = true;
+#endif
             InstallRuntimeBindings();
             OnTimelineChanged?.Invoke(asset);
         }
@@ -180,6 +188,80 @@ namespace TLM.TimelineController
         }
 
 #if UNITY_EDITOR
+        static void AddGroupTrackIds(IEnumerable<TrackAsset> tracks, HashSet<int> ids)
+        {
+            foreach (var track in tracks)
+            {
+                if (track is GroupTrack gt)
+                {
+                    ids.Add(gt.GetInstanceID());
+                    AddGroupTrackIds(gt.GetChildTracks(), ids);
+                }
+            }
+        }
+
+        void OnObjectChangesPublished(ref ObjectChangeEventStream stream)
+        {
+            var timelineAsset = playableDirector?.playableAsset as TimelineAsset;
+            if (timelineAsset == null) return;
+
+            var watchedIds = new HashSet<int>();
+            watchedIds.Add(timelineAsset.GetInstanceID());
+            for (int i = 0; i < timelineAsset.outputTrackCount; i++)
+            {
+                var track = timelineAsset.GetOutputTrack(i);
+                if (track != null) watchedIds.Add(track.GetInstanceID());
+            }
+            // Watch all GroupTracks at any depth so reordering at any level triggers dirty.
+            AddGroupTrackIds(timelineAsset.GetRootTracks(), watchedIds);
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("[TC] ObjectChangeEvents stream length=" + stream.length);
+
+            for (int i = 0; i < stream.length; i++)
+            {
+                var kind = stream.GetEventType(i);
+                switch (kind)
+                {
+                    case ObjectChangeKind.ChangeGameObjectOrComponentProperties:
+                        stream.GetChangeGameObjectOrComponentPropertiesEvent(i, out var propEvent);
+                        sb.AppendLine("  " + kind + " id=" + propEvent.instanceId + " watched=" + watchedIds.Contains(propEvent.instanceId));
+                        if (watchedIds.Contains(propEvent.instanceId)) { _bindingsDirty = true; Debug.Log(sb + "  → dirty"); return; }
+                        break;
+                    case ObjectChangeKind.ChangeGameObjectStructureHierarchy:
+                        stream.GetChangeGameObjectStructureHierarchyEvent(i, out var hierEvent);
+                        sb.AppendLine("  " + kind + " id=" + hierEvent.instanceId + " watched=" + watchedIds.Contains(hierEvent.instanceId));
+                        if (watchedIds.Contains(hierEvent.instanceId)) { _bindingsDirty = true; Debug.Log(sb + "  → dirty"); return; }
+                        break;
+                    case ObjectChangeKind.DestroyGameObjectHierarchy:
+                        stream.GetDestroyGameObjectHierarchyEvent(i, out var destroyEvent);
+                        sb.AppendLine("  " + kind + " id=" + destroyEvent.instanceId + " watched=" + watchedIds.Contains(destroyEvent.instanceId));
+                        if (watchedIds.Contains(destroyEvent.instanceId)) { _bindingsDirty = true; Debug.Log(sb + "  → dirty"); return; }
+                        break;
+                    case ObjectChangeKind.DestroyAssetObject:
+                        stream.GetDestroyAssetObjectEvent(i, out var destroyAssetEvent);
+                        sb.AppendLine("  " + kind + " id=" + destroyAssetEvent.instanceId + " watched=" + watchedIds.Contains(destroyAssetEvent.instanceId));
+                        if (watchedIds.Contains(destroyAssetEvent.instanceId)) { _bindingsDirty = true; Debug.Log(sb + "  → dirty"); return; }
+                        break;
+                    case ObjectChangeKind.ChangeRootOrder:
+                        stream.GetChangeRootOrderEvent(i, out var rootOrderEvent);
+                        sb.AppendLine("  " + kind + " id=" + rootOrderEvent.instanceId + " watched=" + watchedIds.Contains(rootOrderEvent.instanceId));
+                        if (watchedIds.Contains(rootOrderEvent.instanceId)) { _bindingsDirty = true; Debug.Log(sb + "  → dirty"); return; }
+                        break;
+                    case ObjectChangeKind.ChangeAssetObjectProperties:
+                        stream.GetChangeAssetObjectPropertiesEvent(i, out var assetEvent);
+                        sb.AppendLine("  " + kind + " id=" + assetEvent.instanceId + " watched=" + watchedIds.Contains(assetEvent.instanceId));
+                        if (watchedIds.Contains(assetEvent.instanceId)) { _bindingsDirty = true; Debug.Log(sb + "  → dirty"); return; }
+                        break;
+                    default:
+                        sb.AppendLine("  " + kind + " (no id extracted)");
+                        break;
+                }
+            }
+
+            Debug.Log(sb.ToString());
+        }
+
         public void ResetActiveBindings()
         {
             var asset = playableDirector.playableAsset as TimelineAsset;
@@ -210,16 +292,24 @@ namespace TLM.TimelineController
 
             if (!ActiveInScene)
                 return;
-
-            if (LayoutDrifted())
+            if (_bindingsDirty)
             {
-                ResetActiveBindings();
-                return;
+                _bindingsDirty = false;
+                var ta = playableDirector.playableAsset as TimelineAsset;
+                var sbPre = new System.Text.StringBuilder("[TC] dirty — recapture. Before trackBindings:\n");
+                foreach (var b in trackBindings) sbPre.AppendLine("  track=" + b.trackIndex + " id=" + b.id);
+                sbPre.AppendLine("Current slots:");
+                if (ta != null) for (int di = 0; di < ta.outputTrackCount; di++) { var dt = ta.GetOutputTrack(di); var db = playableDirector.GetGenericBinding(dt); var parent = (dt?.parent as UnityEngine.Timeline.GroupTrack); sbPre.AppendLine("  slot[" + di + "] " + dt?.GetType().Name + " \"" + dt?.name + "\" parent=" + (parent != null ? "\"" + parent.name + "\"" : "root") + " binding=" + (db != null ? db.name : "null")); }
+                Debug.Log(sbPre.ToString());
+                UpdateBindingList(playableDirector, trackBindings, false);
+                UpdateNestedTimelineBindingList(playableDirector, nestedTimelineBindings);
+                FlushBindingsToSO(playableDirector.playableAsset as TimelineAsset);
+                EditorUtility.SetDirty(this);
+                var sbPost = new System.Text.StringBuilder("[TC] After recapture:\n");
+                foreach (var b in trackBindings) sbPost.AppendLine("  track=" + b.trackIndex + " id=" + b.id);
+                Debug.Log(sbPost.ToString());
             }
 
-            UpdateBindingList(playableDirector, trackBindings, false);
-            UpdateNestedTimelineBindingList(playableDirector, nestedTimelineBindings);
-            FlushBindingsToSO(playableDirector.playableAsset as TimelineAsset);
             InstallRuntimeBindings();
         }
 #endif
@@ -263,17 +353,28 @@ namespace TLM.TimelineController
             return timelineRef.Id;
         }
 
-        public void UpdateBindingList(PlayableDirector pd, List<TrackBinding> trackBindings, bool includeChildObject)
+        // Rebuilds trackBindings from scratch using GetOutputTrack indices.
+        // Live bindings are captured at their current index.
+        // Empty slots: if additiveSceneWorkflow, a previously stored GUID is preserved at the new index
+        // only if that GUID wasn't already captured at another index (i.e. it's genuinely unloaded, not moved).
+        public bool UpdateBindingList(PlayableDirector pd, List<TrackBinding> trackBindings, bool includeChildObject)
         {
             var timelineAsset = pd.playableAsset as TimelineAsset;
             if (timelineAsset == null)
-                return;
+                return false;
+
+            // Previous entries keyed by index, for unloaded-scene slot preservation.
+            var previous = new Dictionary<int, string>(trackBindings.Count);
+            foreach (var b in trackBindings)
+                previous[b.trackIndex] = b.id;
 
             PrefabUtility.RecordPrefabInstancePropertyModifications(this);
 
-            if (!includeChildObject)
-                _untrackedTrackIndices.Clear();
+            var next = new List<TrackBinding>(timelineAsset.outputTrackCount);
+            // Track which GUIDs we captured live so we don't also preserve them as unloaded.
+            var capturedGuids = new HashSet<string>();
 
+            // First pass: capture all live bindings.
             for (int i = 0; i < timelineAsset.outputTrackCount; i++)
             {
                 TrackAsset trackAsset = timelineAsset.GetOutputTrack(i);
@@ -287,26 +388,43 @@ namespace TLM.TimelineController
                     owner = comp.gameObject;
 
                 if (owner == null)
-                {
-                    if (!includeChildObject)
-                        _untrackedTrackIndices.Add(i);
-                    MergeRule(trackBindings, i);
                     continue;
-                }
 
                 if (!includeChildObject && IsChildOf(owner.transform, pd.transform))
-                {
-                    _untrackedTrackIndices.Add(i);
                     continue;
-                }
 
                 var guid = GetTimelineId(owner);
-                var existing = trackBindings.FindIndex(b => b.trackIndex == i);
-                if (existing >= 0)
-                    trackBindings[existing] = new TrackBinding() { trackIndex = i, id = guid };
-                else
-                    trackBindings.Add(new TrackBinding() { trackIndex = i, id = guid });
+                next.Add(new TrackBinding { trackIndex = i, id = guid });
+                capturedGuids.Add(guid);
             }
+
+            // Second pass: preserve unloaded-scene GUIDs for empty slots, skipping any already captured.
+            if (additiveSceneWorkflow)
+            {
+                for (int i = 0; i < timelineAsset.outputTrackCount; i++)
+                {
+                    TrackAsset trackAsset = timelineAsset.GetOutputTrack(i);
+                    if (trackAsset == null)
+                        continue;
+
+                    var binding = pd.GetGenericBinding(trackAsset);
+                    var owner = binding as GameObject;
+                    var comp = binding as Component;
+                    if (comp != null)
+                        owner = comp.gameObject;
+
+                    if (owner != null)
+                        continue;
+
+                    if (previous.TryGetValue(i, out var preserved) && !capturedGuids.Contains(preserved))
+                        next.Add(new TrackBinding { trackIndex = i, id = preserved });
+                }
+            }
+
+            trackBindings.Clear();
+            trackBindings.AddRange(next);
+
+            return false;
         }
 
         void UpdateNestedTimelineBindingList(PlayableDirector pd, List<NestedTimlineBinding> nestedTimelineBindings)
@@ -392,49 +510,6 @@ namespace TLM.TimelineController
         }
 #endif
 
-        // Returns true if the set of untracked track indices has changed since the last capture pass.
-        // Any layout change (reorder, add, remove of a GroupTrack, self-ref, or unbound track) shifts indices.
-        bool LayoutDrifted()
-        {
-            var timelineAsset = playableDirector.playableAsset as TimelineAsset;
-            if (timelineAsset == null) return false;
-
-            // Recompute untracked set from current timeline state and compare against stored.
-            var current = new HashSet<int>();
-            for (int i = 0; i < timelineAsset.outputTrackCount; i++)
-            {
-                var trackAsset = timelineAsset.GetOutputTrack(i);
-                if (trackAsset == null) continue;
-                var binding = playableDirector.GetGenericBinding(trackAsset);
-                var owner = binding as GameObject;
-                var comp = binding as Component;
-                if (comp != null) owner = comp.gameObject;
-                if (owner == null || IsChildOf(owner.transform, transform))
-                    current.Add(i);
-            }
-            if (!current.SetEquals(_untrackedTrackIndices)) return true;
-
-            foreach (var (trackIndex, clipIndex) in _selfClipIndices)
-            {
-                if (trackIndex >= timelineAsset.outputTrackCount) return true;
-                var controlTrack = timelineAsset.GetOutputTrack(trackIndex) as ControlTrack;
-                if (controlTrack == null) return true;
-                int ci = -1;
-                foreach (var clip in controlTrack.GetClips())
-                {
-                    ci++;
-                    if (ci == clipIndex)
-                    {
-                        var resolved = (clip.asset as ControlPlayableAsset)?.sourceGameObject.Resolve(playableDirector);
-                        if (ClassifyNestedOwner(resolved) != NestedOwnerResolution.Self) return true;
-                        break;
-                    }
-                }
-            }
-
-            return false;
-        }
-
         enum NestedOwnerResolution { Missing, Self, Resolved }
 
         // Resolves a nested owner from the IdMap (install path).
@@ -453,15 +528,6 @@ namespace TLM.TimelineController
             if (resolvedObj == null) return NestedOwnerResolution.Missing;
             if (resolvedObj == gameObject) return NestedOwnerResolution.Self;
             return NestedOwnerResolution.Resolved;
-        }
-
-        void MergeRule(List<TrackBinding> list, int trackIndex)
-        {
-            if (!additiveSceneWorkflow)
-            {
-                var stale = list.FindIndex(b => b.trackIndex == trackIndex);
-                if (stale >= 0) list.RemoveAt(stale);
-            }
         }
 
         void MergeRule(List<NestedTimlineBinding> list, int trackIndex, int clipIndex)
@@ -493,7 +559,6 @@ namespace TLM.TimelineController
                 Debug.LogWarningFormat("trackIndex out of bounds:{0}, {1}", timelineAsset.ToString(), binding.trackIndex);
                 return false;
             }
-
             TrackAsset trackAsset = timelineAsset.GetOutputTrack(binding.trackIndex);
 
             Type outputType = null;
@@ -568,7 +633,6 @@ namespace TLM.TimelineController
                     Debug.LogWarningFormat("trackIndex out of bounds: {0}, {1}", timelineAsset.ToString(), entry.trackIndex);
                     continue;
                 }
-
                 TrackAsset trackAsset = timelineAsset.GetOutputTrack(entry.trackIndex);
                 int clipIndex = -1;
                 ControlPlayableAsset clipAsset = null;
