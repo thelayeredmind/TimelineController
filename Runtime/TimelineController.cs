@@ -97,6 +97,7 @@ namespace TLM.TimelineController
 #endif
             playableDirector = GetComponent<PlayableDirector>();
             playableDirector.stopped += OnPlayableDirectorStopped;
+            TimelineReference.OnRegistered += InstallRuntimeBindings;
         }
 
         private void Start()
@@ -120,6 +121,7 @@ namespace TLM.TimelineController
 
             runtimeObjMap.Clear();
             playableDirector.stopped -= OnPlayableDirectorStopped;
+            TimelineReference.OnRegistered -= InstallRuntimeBindings;
             onComplete = null;
         }
 

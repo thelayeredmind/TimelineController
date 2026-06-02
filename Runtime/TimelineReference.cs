@@ -9,6 +9,7 @@ namespace TLM.TimelineController
     public class TimelineReference : MonoBehaviour
     {
         public static readonly Dictionary<string, List<GameObject>> IdMap = new Dictionary<string, List<GameObject>>();
+        public static event Action OnRegistered;
 
         [SerializeField, ShowAsReadOnly]
         public string Id = Guid.NewGuid().ToString();
@@ -32,7 +33,10 @@ namespace TLM.TimelineController
             }
 
             if (!instances.Contains(gameObject))
+            {
                 instances.Add(gameObject);
+                OnRegistered?.Invoke();
+            }
         }
 
         void OnDestroy()
