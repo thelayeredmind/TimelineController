@@ -77,8 +77,6 @@ namespace TLM.TimelineController
                 return;
 #endif
             playableDirector = GetComponent<PlayableDirector>();
-            if (!Application.isPlaying)
-                InstallRuntimeBindings();
         }
 
         private void OnEnable()
@@ -99,6 +97,16 @@ namespace TLM.TimelineController
 #endif
             playableDirector = GetComponent<PlayableDirector>();
             playableDirector.stopped += OnPlayableDirectorStopped;
+        }
+
+        private void Start()
+        {
+#if UNITY_EDITOR
+            if (!EditorApplication.isPlaying)
+                return;
+#endif
+            // All Awakes have fired — IdMap is fully populated. Safe to install bindings.
+            InstallRuntimeBindings();
         }
 
         private void OnDisable()
