@@ -347,7 +347,7 @@ namespace TLM.TimelineController
                 return;
 
             _lastKnownAsset = current;
-            SetTimeline(current);
+            SetTimeline(current as TimelineAsset);
         }
 
 #if UNITY_EDITOR
