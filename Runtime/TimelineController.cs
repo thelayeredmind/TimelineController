@@ -691,11 +691,7 @@ namespace TLM.TimelineController
                     continue;
                 }
 
-                playableDirector.SetReferenceValue(clipAsset.sourceGameObject.exposedName, owner);
                 PlayableDirector nestedDirector = owner.GetComponent<PlayableDirector>();
-
-                if (nestedDirector.state == PlayState.Playing)
-                    continue;
 
                 if (nestedDirector.playableAsset != entry.timelineAsset)
                     nestedDirector.playableAsset = entry.timelineAsset;
@@ -708,6 +704,12 @@ namespace TLM.TimelineController
                     else
                         BindTrack(nestedDirector, binding);
                 }
+
+                // SetReferenceValue only takes effect if the graph is rebuilt — save and restore time to avoid resetting A.
+                double savedTime = playableDirector.time;
+                playableDirector.SetReferenceValue(clipAsset.sourceGameObject.exposedName, owner);
+                playableDirector.RebuildGraph();
+                playableDirector.time = savedTime;
             }
         }
     }
