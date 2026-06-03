@@ -51,6 +51,7 @@ namespace TLM.TimelineController
         Dictionary<string, GameObject> runtimeObjMap = new Dictionary<string, GameObject>();
         List<TimelineReference> timelineReferences = new List<TimelineReference>(10);
         int _lastNestedBindingCount = -1;
+        PlayableAsset _lastKnownAsset;
 #if UNITY_EDITOR
         // Non-serialized — rebuilt each capture pass.
         readonly HashSet<(int track, int clip)> _selfClipIndices = new HashSet<(int, int)>();
@@ -107,6 +108,7 @@ namespace TLM.TimelineController
                 return;
 #endif
             // All Awakes have fired — IdMap is fully populated. Safe to install bindings.
+            _lastKnownAsset = playableDirector.playableAsset;
             InstallRuntimeBindings();
         }
 
@@ -331,6 +333,24 @@ namespace TLM.TimelineController
             InstallRuntimeBindings();
         }
 #endif
+
+        // Runtime-only: detects external playableAsset swaps (e.g. direct director.playableAsset assignment)
+        // and reacts the same way SetTimeline would.
+        void LateUpdate()
+        {
+#if UNITY_EDITOR
+            if (!EditorApplication.isPlaying)
+                return;
+#endif
+            var current = playableDirector.playableAsset;
+            if (current == _lastKnownAsset)
+                return;
+
+            _lastKnownAsset = current;
+            LoadBindingsFromSO(current as TimelineAsset);
+            InstallRuntimeBindings();
+            OnTimelineChanged?.Invoke(current as TimelineAsset);
+        }
 
 #if UNITY_EDITOR
         static bool IsChildOf(Transform child, Transform parent)
