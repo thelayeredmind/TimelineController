@@ -134,14 +134,17 @@ namespace TLM.TimelineController
             this.onComplete = onComplete;
         }
 
-        public void SetTimeline(TimelineAsset asset)
+        public void SetTimeline(TimelineAsset asset, bool playableAssigned = false)
         {
 #if UNITY_EDITOR
             if (!EditorApplication.isPlaying)
                 FlushBindingsToSO(playableDirector.playableAsset as TimelineAsset);
             _bindingsDirty = true;
 #endif
-            playableDirector.playableAsset = asset;
+            if (!playableAssigned)
+            {
+                playableDirector.playableAsset = asset;
+            }
             LoadBindingsFromSO(asset);
             InstallRuntimeBindings();
             OnTimelineChanged?.Invoke(asset);
@@ -347,7 +350,7 @@ namespace TLM.TimelineController
                 return;
 
             _lastKnownAsset = current;
-            SetTimeline(current as TimelineAsset);
+            SetTimeline(current as TimelineAsset, true);
         }
 
 #if UNITY_EDITOR
