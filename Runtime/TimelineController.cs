@@ -134,12 +134,13 @@ namespace TLM.TimelineController
 
         public void SetTimeline(TimelineAsset asset)
         {
-            FlushBindingsToSO(playableDirector.playableAsset as TimelineAsset);
-            playableDirector.playableAsset = asset;
-            LoadBindingsFromSO(asset);
 #if UNITY_EDITOR
+            if (!EditorApplication.isPlaying)
+                FlushBindingsToSO(playableDirector.playableAsset as TimelineAsset);
             _bindingsDirty = true;
 #endif
+            playableDirector.playableAsset = asset;
+            LoadBindingsFromSO(asset);
             InstallRuntimeBindings();
             OnTimelineChanged?.Invoke(asset);
         }
