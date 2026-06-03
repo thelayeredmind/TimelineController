@@ -347,9 +347,7 @@ namespace TLM.TimelineController
                 return;
 
             _lastKnownAsset = current;
-            LoadBindingsFromSO(current as TimelineAsset);
-            InstallRuntimeBindings();
-            OnTimelineChanged?.Invoke(current as TimelineAsset);
+            SetTimeline(current);
         }
 
 #if UNITY_EDITOR
