@@ -693,7 +693,12 @@ namespace TLM.TimelineController
 
                 playableDirector.SetReferenceValue(clipAsset.sourceGameObject.exposedName, owner);
                 PlayableDirector nestedDirector = owner.GetComponent<PlayableDirector>();
-                nestedDirector.playableAsset = entry.timelineAsset;
+
+                if (nestedDirector.state == PlayState.Playing)
+                    continue;
+
+                if (nestedDirector.playableAsset != entry.timelineAsset)
+                    nestedDirector.playableAsset = entry.timelineAsset;
 
                 foreach (var binding in entry.nestedTimelineTrackBindings)
                 {
@@ -703,8 +708,6 @@ namespace TLM.TimelineController
                     else
                         BindTrack(nestedDirector, binding);
                 }
-
-                nestedDirector.RebuildGraph();
             }
         }
     }
