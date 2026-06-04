@@ -102,11 +102,12 @@ namespace TLM.TimelineController
                 string assetName = asset != null ? asset.name : "(none)";
                 if (EditorUtility.DisplayDialog(
                     "Reset Bindings",
-                    $"This will clear and re-capture all bindings for \"{assetName}\" from the current scene state. Stale entries will be discarded.\n\nThis cannot be undone.",
+                    $"This will destroy ALL existing BindingData assets for \"{assetName}\", create a fresh one, and re-capture bindings from the current scene state. Stale entries will be discarded.\n\nThis cannot be undone.",
                     "Reset", "Cancel"))
                 {
                     Undo.RecordObject(timelineController, "Reset Timeline Bindings");
-                    timelineController.ResetActiveBindings();
+                    var freshData = asset != null ? RebuildBindingDataAsset(asset) : null;
+                    timelineController.ResetActiveBindings(freshData);
                 }
             }
             GUI.backgroundColor = prevColor;
@@ -134,6 +135,31 @@ namespace TLM.TimelineController
             AssetDatabase.SaveAssets();
             AssetDatabase.ImportAsset(AssetDatabase.GetAssetPath(timelineAsset));
             return data;
+        }
+
+        // Destroys all existing TimelineBindingData sub-assets inside the .playable file,
+        // then creates and returns a single fresh one.
+        static TimelineBindingData RebuildBindingDataAsset(TimelineAsset timelineAsset)
+        {
+            var path = AssetDatabase.GetAssetPath(timelineAsset);
+            Debug.Log($"[TC] RebuildBindingDataAsset path={path}");
+            var toDestroy = new System.Collections.Generic.List<TimelineBindingData>();
+            foreach (var sub in AssetDatabase.LoadAllAssetsAtPath(path))
+            {
+                Debug.Log($"[TC] sub-asset: {sub?.name} type={sub?.GetType().Name}");
+                if (sub is TimelineBindingData bd)
+                    toDestroy.Add(bd);
+            }
+            Debug.Log($"[TC] found {toDestroy.Count} TimelineBindingData to destroy");
+            foreach (var bd in toDestroy)
+            {
+                var bdName = bd.name;
+                AssetDatabase.RemoveObjectFromAsset(bd);
+                DestroyImmediate(bd, true);
+                Debug.Log($"[TC] destroyed {bdName}");
+            }
+            return CreateBindingDataAsset(timelineAsset);
+
         }
     }
 }

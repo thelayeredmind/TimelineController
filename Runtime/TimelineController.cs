@@ -78,6 +78,9 @@ namespace TLM.TimelineController
                 return;
 #endif
             playableDirector = GetComponent<PlayableDirector>();
+            LoadBindingsFromSO(playableDirector.playableAsset as TimelineAsset);
+            if (!Application.isPlaying)
+                InstallRuntimeBindings();
         }
 
         private void OnEnable()
@@ -91,6 +94,7 @@ namespace TLM.TimelineController
                 ActiveInScene = true;
                 playableDirector = GetComponent<PlayableDirector>();
                 ObjectChangeEvents.changesPublished += OnObjectChangesPublished;
+                LoadBindingsFromSO(playableDirector.playableAsset as TimelineAsset);
                 _bindingsDirty = true;
                 InstallRuntimeBindings();
                 return;
@@ -170,15 +174,18 @@ namespace TLM.TimelineController
 #endif
         }
 
-        // Copies SO → live lists for the given asset (called after swap)
+        // Copies SO → live lists for the given asset.
+        // Only overwrites live lists when a valid BindingData SO exists; otherwise the
+        // serialized lists on the component remain as-is (legacy / no-SO fallback).
         void LoadBindingsFromSO(TimelineAsset asset)
         {
-            trackBindings.Clear();
-            nestedTimelineBindings.Clear();
             if (asset == null) return;
 
             var entry = timelineEntries.Find(e => e.timelineAsset == asset);
             if (entry?.bindingData == null) return;
+
+            trackBindings.Clear();
+            nestedTimelineBindings.Clear();
 
             foreach (var b in entry.bindingData.trackBindings)
                 trackBindings.Add(new TrackBinding { trackIndex = b.trackIndex, id = b.id });
@@ -283,17 +290,14 @@ namespace TLM.TimelineController
             Debug.Log(sb.ToString());
         }
 
-        public void ResetActiveBindings()
+        // freshBindingData: if provided, replaces the entry's SO before re-capture (editor passes a newly created one)
+        public void ResetActiveBindings(TimelineBindingData freshBindingData = null)
         {
             var asset = playableDirector.playableAsset as TimelineAsset;
-
-            // Clear SO first so no stale data survives a serialization reload mid-reset.
             var entry = timelineEntries.Find(e => e.timelineAsset == asset);
-            if (entry?.bindingData != null)
-            {
-                entry.bindingData.trackBindings.Clear();
-                entry.bindingData.nestedTimelineBindings.Clear();
-            }
+
+            if (freshBindingData != null && entry != null)
+                entry.bindingData = freshBindingData;
 
             trackBindings.Clear();
             nestedTimelineBindings.Clear();
