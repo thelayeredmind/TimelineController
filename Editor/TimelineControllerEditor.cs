@@ -1,3 +1,4 @@
+using System.Linq;
 using UnityEngine;
 using UnityEditor;
 using UnityEngine.Playables;
@@ -15,13 +16,9 @@ namespace TLM.TimelineController
         {
             timelineController = serializedObject.targetObject as TimelineController;
             director = timelineController.GetComponent<PlayableDirector>();
-            EditorApplication.update += Repaint;
         }
 
-        private void OnDisable()
-        {
-            EditorApplication.update -= Repaint;
-        }
+        public override bool RequiresConstantRepaint() => true;
 
         public override void OnInspectorGUI()
         {
@@ -177,13 +174,7 @@ namespace TLM.TimelineController
         static TimelineBindingData RebuildBindingDataAsset(TimelineAsset timelineAsset)
         {
             var path = AssetDatabase.GetAssetPath(timelineAsset);
-            var toDestroy = new System.Collections.Generic.List<TimelineBindingData>();
-            foreach (var sub in AssetDatabase.LoadAllAssetsAtPath(path))
-            {
-                if (sub is TimelineBindingData bd)
-                    toDestroy.Add(bd);
-            }
-            foreach (var bd in toDestroy)
+            foreach (var bd in AssetDatabase.LoadAllAssetsAtPath(path).OfType<TimelineBindingData>().ToList())
             {
                 AssetDatabase.RemoveObjectFromAsset(bd);
                 DestroyImmediate(bd, true);

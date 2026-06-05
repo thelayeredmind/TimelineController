@@ -103,11 +103,10 @@ namespace TLM.TimelineController
                     if (this == null) { EditorApplication.delayCall -= tryLoad; return; }
                     var asset = playableDirector.playableAsset as TimelineAsset;
                     var entry = asset != null ? timelineEntries.Find(e => e.timelineAsset == asset) : null;
-                    bool soReady = entry?.bindingData != null;
-                    Debug.Log($"[TC] tryLoad tick — retriesLeft={retriesLeft} asset={asset?.name ?? "NULL"} soReady={soReady}");
-                    if ((!soReady) && --retriesLeft > 0) return;
+                    if (entry?.bindingData == null && --retriesLeft > 0) return;
                     EditorApplication.delayCall -= tryLoad;
-                    LoadBindingsFromSO(asset);
+                    if (entry?.bindingData != null)
+                        LoadBindingsFromSO(entry);
                     _bindingsDirty = true;
                     InstallRuntimeBindings();
                 };
@@ -196,21 +195,18 @@ namespace TLM.TimelineController
         // Copies SO → live lists for the given asset.
         void LoadBindingsFromSO(TimelineAsset asset)
         {
-            if (asset == null) { Debug.Log("[TC] LoadBindingsFromSO: asset null"); return; }
-
+            if (asset == null) return;
             var entry = timelineEntries.Find(e => e.timelineAsset == asset);
-            if (entry == null) { Debug.Log($"[TC] LoadBindingsFromSO: no entry for '{asset.name}', entries={timelineEntries.Count}"); return; }
-            if (entry.bindingData == null) { Debug.Log($"[TC] LoadBindingsFromSO: entry found for '{asset.name}' but SO is null"); return; }
-            Debug.Log($"[TC] LoadBindingsFromSO: loading {entry.bindingData.trackBindings.Count} track, {entry.bindingData.nestedTimelineBindings.Count} nested from SO");
+            if (entry?.bindingData == null) return;
+            LoadBindingsFromSO(entry);
+        }
 
+        void LoadBindingsFromSO(TimelineAssetEntry entry)
+        {
             trackBindings.Clear();
             nestedTimelineBindings.Clear();
-
-            foreach (var b in entry.bindingData.trackBindings)
-                trackBindings.Add(new TrackBinding { trackIndex = b.trackIndex, id = b.id });
-
-            foreach (var nb in entry.bindingData.nestedTimelineBindings)
-                nestedTimelineBindings.Add(nb);
+            trackBindings.AddRange(entry.bindingData.trackBindings);
+            nestedTimelineBindings.AddRange(entry.bindingData.nestedTimelineBindings);
         }
 
         public void AddRuntimeObject(GameObject bindingObject)
@@ -645,10 +641,7 @@ namespace TLM.TimelineController
             {
                 NestedTimlineBinding entry = nestedTimelineBindings[i];
                 if (entry.timelineAsset == null || string.IsNullOrEmpty(entry.id))
-                {
-                    Debug.Log($"[TC] nested entry skipped — track={entry.trackIndex} clip={entry.clipIndex} timelineAsset={(entry.timelineAsset == null ? "NULL" : entry.timelineAsset.name)} id='{entry.id}'");
                     continue;
-                }
 
                 var resolution = ResolveNestedOwner(entry.id, out GameObject owner);
                 if (resolution != NestedOwnerResolution.Resolved)
