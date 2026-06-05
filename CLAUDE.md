@@ -41,7 +41,8 @@ Added `TimelineBindingData` ScriptableObject and `TimelineAssetEntry` list to su
 
 **Architecture:**
 - `TimelineBindingData` SO — owns `trackBindings` + `nestedTimelineBindings` for one `TimelineAsset`. Embedded as a sub-asset inside its owning `.playable` file (visible as foldable child in Project browser)
-- `TimelineController` retains live flat lists (`trackBindings`, `nestedTimelineBindings`) as the active working set
+- `TimelineController` retains live flat lists (`trackBindings`, `nestedTimelineBindings`) as the active working set — these are **not** `[SerializeField]`; they are a pure runtime cache rebuilt from the SO on every `OnEnable`. The scene file never contains binding data.
+- On scene load, `OnEnable` defers via a retrying `delayCall` until both `playableAsset` and `bindingData` sub-asset references have resolved (Unity restores cross-asset references asynchronously). `TimelineReference.OnRegistered` is also subscribed in edit-mode so Control Track activation of an inactive nested GameObject triggers a reinstall.
 - `List<TimelineAssetEntry>` on the controller maps each `TimelineAsset` → its `TimelineBindingData` SO
 - `FlushBindingsToSO()` — mirrors live lists → SO (called every editor frame and before swap)
 - `LoadBindingsFromSO()` — copies SO → live lists (called after swap)

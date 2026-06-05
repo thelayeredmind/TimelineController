@@ -15,6 +15,12 @@ namespace TLM.TimelineController
         {
             timelineController = serializedObject.targetObject as TimelineController;
             director = timelineController.GetComponent<PlayableDirector>();
+            EditorApplication.update += Repaint;
+        }
+
+        private void OnDisable()
+        {
+            EditorApplication.update -= Repaint;
         }
 
         public override void OnInspectorGUI()
@@ -123,6 +129,35 @@ namespace TLM.TimelineController
             }
 
             EditorGUILayout.Space();
+
+            // --- Runtime cache (read-only, populated from SO on OnEnable) ---
+            EditorGUILayout.LabelField("Track Bindings (runtime cache)", EditorStyles.boldLabel);
+            var trackBindings = timelineController.TrackBindings;
+            if (trackBindings.Count == 0)
+            {
+                EditorGUILayout.HelpBox("No bindings loaded.", MessageType.None);
+            }
+            else
+            {
+                using (new EditorGUI.DisabledGroupScope(true))
+                {
+                    foreach (var b in trackBindings)
+                        EditorGUILayout.LabelField($"  track {b.trackIndex}", b.id);
+                }
+            }
+
+            var nestedBindings = timelineController.NestedTimelineBindings;
+            if (nestedBindings.Count > 0)
+            {
+                EditorGUILayout.LabelField("Nested Timeline Bindings (runtime cache)", EditorStyles.boldLabel);
+                using (new EditorGUI.DisabledGroupScope(true))
+                {
+                    foreach (var nb in nestedBindings)
+                        EditorGUILayout.LabelField($"  track {nb.trackIndex} clip {nb.clipIndex}", nb.id);
+                }
+            }
+
+            EditorGUILayout.Space();
             using (new EditorGUI.DisabledGroupScope(true))
                 base.OnInspectorGUI();
         }
@@ -142,24 +177,18 @@ namespace TLM.TimelineController
         static TimelineBindingData RebuildBindingDataAsset(TimelineAsset timelineAsset)
         {
             var path = AssetDatabase.GetAssetPath(timelineAsset);
-            Debug.Log($"[TC] RebuildBindingDataAsset path={path}");
             var toDestroy = new System.Collections.Generic.List<TimelineBindingData>();
             foreach (var sub in AssetDatabase.LoadAllAssetsAtPath(path))
             {
-                Debug.Log($"[TC] sub-asset: {sub?.name} type={sub?.GetType().Name}");
                 if (sub is TimelineBindingData bd)
                     toDestroy.Add(bd);
             }
-            Debug.Log($"[TC] found {toDestroy.Count} TimelineBindingData to destroy");
             foreach (var bd in toDestroy)
             {
-                var bdName = bd.name;
                 AssetDatabase.RemoveObjectFromAsset(bd);
                 DestroyImmediate(bd, true);
-                Debug.Log($"[TC] destroyed {bdName}");
             }
             return CreateBindingDataAsset(timelineAsset);
-
         }
     }
 }
