@@ -9,7 +9,10 @@ namespace TLM.TimelineController
     public class TimelineReference : MonoBehaviour
     {
         public static readonly Dictionary<string, List<GameObject>> IdMap = new Dictionary<string, List<GameObject>>();
-        public static event Action OnRegistered;
+
+        // Fired when a new instance enters IdMap for the first time — signals the controller that
+        // scene state has changed and a full discovery sweep (RegisterAll) should be scheduled.
+        public static event Action OnSceneStateChanged;
 
         [SerializeField, ShowAsReadOnly]
         public string Id = Guid.NewGuid().ToString();
@@ -24,6 +27,15 @@ namespace TLM.TimelineController
             Register();
         }
 
+        // Sweeps all TimelineReferences in loaded scenes, including inactive ones, and registers
+        // each into IdMap. Called by TimelineController after OnSceneStateChanged fires.
+        public static void RegisterAll()
+        {
+            var all = FindObjectsByType<TimelineReference>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            foreach (var r in all)
+                r.Register();
+        }
+
         void Register()
         {
             if (!IdMap.TryGetValue(Id, out var instances))
@@ -35,7 +47,7 @@ namespace TLM.TimelineController
             if (!instances.Contains(gameObject))
             {
                 instances.Add(gameObject);
-                OnRegistered?.Invoke();
+                OnSceneStateChanged?.Invoke();
             }
         }
 

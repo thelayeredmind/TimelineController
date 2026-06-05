@@ -49,10 +49,14 @@ namespace TLM.TimelineController
         Dictionary<string, GameObject> runtimeObjMap = new Dictionary<string, GameObject>();
         List<TimelineReference> timelineReferences = new List<TimelineReference>(10);
         PlayableAsset _lastKnownAsset;
+        // Set by OnSceneStateChanged; cleared in Update/LateUpdate after sweep + install.
+        bool _referencesDirty;
 #if UNITY_EDITOR
         // Non-serialized — rebuilt each capture pass.
         readonly HashSet<(int track, int clip)> _selfClipIndices = new HashSet<(int, int)>();
         bool _bindingsDirty = true;
+        // Incremented each time InstallRuntimeBindings runs — readable by smoke tests.
+        [NonSerialized] public int InstallCount;
 #endif
 
         public event Action<TimelineAsset> OnTimelineChanged;
@@ -92,7 +96,7 @@ namespace TLM.TimelineController
                 ActiveInScene = true;
                 playableDirector = GetComponent<PlayableDirector>();
                 ObjectChangeEvents.changesPublished += OnObjectChangesPublished;
-                TimelineReference.OnRegistered += InstallRuntimeBindings;
+                TimelineReference.OnSceneStateChanged += OnReferencesChanged;
                 // Both playableAsset and the bindingData sub-asset reference inside timelineEntries
                 // are cross-asset references that Unity resolves asynchronously after OnEnable.
                 // Retry each editor tick until both are non-null (max 10 ticks).
@@ -108,6 +112,7 @@ namespace TLM.TimelineController
                     if (entry?.bindingData != null)
                         LoadBindingsFromSO(entry);
                     _bindingsDirty = true;
+                    TimelineReference.RegisterAll();
                     InstallRuntimeBindings();
                 };
                 EditorApplication.delayCall += tryLoad;
@@ -116,7 +121,7 @@ namespace TLM.TimelineController
 #endif
             playableDirector = GetComponent<PlayableDirector>();
             playableDirector.stopped += OnPlayableDirectorStopped;
-            TimelineReference.OnRegistered += InstallRuntimeBindings;
+            TimelineReference.OnSceneStateChanged += OnReferencesChanged;
         }
 
         private void Start()
@@ -125,9 +130,10 @@ namespace TLM.TimelineController
             if (!EditorApplication.isPlaying)
                 return;
 #endif
-            // All Awakes have fired — IdMap is fully populated. Safe to install bindings.
+            // All Awakes have fired — safe to sweep for any missed inactive references then install.
             _lastKnownAsset = playableDirector.playableAsset;
             LoadBindingsFromSO(playableDirector.playableAsset as TimelineAsset);
+            TimelineReference.RegisterAll();
             InstallRuntimeBindings();
         }
 
@@ -137,7 +143,7 @@ namespace TLM.TimelineController
             if (!Application.isPlaying)
             {
                 ObjectChangeEvents.changesPublished -= OnObjectChangesPublished;
-                TimelineReference.OnRegistered -= InstallRuntimeBindings;
+                TimelineReference.OnSceneStateChanged -= OnReferencesChanged;
             }
 #endif
             if (!Application.isPlaying)
@@ -145,7 +151,7 @@ namespace TLM.TimelineController
 
             runtimeObjMap.Clear();
             playableDirector.stopped -= OnPlayableDirectorStopped;
-            TimelineReference.OnRegistered -= InstallRuntimeBindings;
+            TimelineReference.OnSceneStateChanged -= OnReferencesChanged;
             onComplete = null;
         }
 
@@ -326,18 +332,30 @@ namespace TLM.TimelineController
                 EditorUtility.SetDirty(this);
             }
 
+            if (_referencesDirty)
+            {
+                _referencesDirty = false;
+                TimelineReference.RegisterAll();
+            }
+
             InstallRuntimeBindings();
         }
 #endif
 
-        // Runtime-only: detects external playableAsset swaps (e.g. direct director.playableAsset assignment)
-        // and reacts the same way SetTimeline would.
+        // Runtime-only: handles deferred reference discovery and external playableAsset swaps.
         void LateUpdate()
         {
 #if UNITY_EDITOR
             if (!EditorApplication.isPlaying)
                 return;
 #endif
+            if (_referencesDirty)
+            {
+                _referencesDirty = false;
+                TimelineReference.RegisterAll();
+                InstallRuntimeBindings();
+            }
+
             var current = playableDirector.playableAsset;
             if (current == _lastKnownAsset)
                 return;
@@ -626,8 +644,16 @@ namespace TLM.TimelineController
             return true;
         }
 
+        void OnReferencesChanged()
+        {
+            _referencesDirty = true;
+        }
+
         public void InstallRuntimeBindings()
         {
+#if UNITY_EDITOR
+            InstallCount++;
+#endif
             foreach (var entry in trackBindings)
             {
                 if (string.IsNullOrEmpty(entry.id))
