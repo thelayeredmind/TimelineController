@@ -154,6 +154,27 @@ namespace TLM.TimelineController
                 }
             }
 
+            // --- Binding change status ---
+            EditorGUILayout.Space();
+            const double recentWindow = 2.0;
+            double timeSinceDiff = EditorApplication.timeSinceStartup - timelineController.LastDiffTime;
+            bool recentlyUpdated = timelineController.LastDiffTime >= 0 && timeSinceDiff < recentWindow;
+
+            if (recentlyUpdated)
+            {
+                EditorGUILayout.HelpBox("Change detected, updated SO", MessageType.Info);
+                var lastDiff = timelineController.LastDiffSummary;
+                using (new EditorGUI.DisabledGroupScope(true))
+                {
+                    foreach (var line in lastDiff)
+                        EditorGUILayout.LabelField($"  {line}");
+                }
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("Bindings locked — listening for binding changes...", MessageType.None);
+            }
+
             EditorGUILayout.Space();
             using (new EditorGUI.DisabledGroupScope(true))
                 base.OnInspectorGUI();

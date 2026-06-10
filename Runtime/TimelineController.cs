@@ -57,6 +57,14 @@ namespace TLM.TimelineController
         bool _bindingsDirty = true;
         // Incremented each time InstallRuntimeBindings runs — readable by smoke tests.
         [NonSerialized] public int InstallCount;
+        // Snapshot of the last-known SO state, populated on LoadBindingsFromSO.
+        // Compared against on each autosave to compute the write diff.
+        readonly List<TrackBinding> _cachedTrackBindings = new List<TrackBinding>();
+        readonly List<NestedTimlineBinding> _cachedNestedBindings = new List<NestedTimlineBinding>();
+        // Last diff applied to the SO — readable by the Inspector.
+        readonly List<string> _lastDiffSummary = new List<string>();
+        // EditorApplication.timeSinceStartup of the last applied diff — drives the transient Inspector message.
+        double _lastDiffTime = -1;
 #endif
 
         public event Action<TimelineAsset> OnTimelineChanged;
@@ -67,6 +75,8 @@ namespace TLM.TimelineController
         public List<TimelineAssetEntry> TimelineEntries => timelineEntries;
         public IReadOnlyList<TrackBinding> TrackBindings => trackBindings;
         public IReadOnlyList<NestedTimlineBinding> NestedTimelineBindings => nestedTimelineBindings;
+        public IReadOnlyList<string> LastDiffSummary => _lastDiffSummary;
+        public double LastDiffTime => _lastDiffTime;
 
         void OnValidate()
         {
@@ -195,8 +205,110 @@ namespace TLM.TimelineController
 
 #if UNITY_EDITOR
             UnityEditor.EditorUtility.SetDirty(entry.bindingData);
+            _cachedTrackBindings.Clear();
+            foreach (var b in entry.bindingData.trackBindings)
+                _cachedTrackBindings.Add(new TrackBinding { trackIndex = b.trackIndex, id = b.id });
+            _cachedNestedBindings.Clear();
+            _cachedNestedBindings.AddRange(entry.bindingData.nestedTimelineBindings);
 #endif
         }
+
+#if UNITY_EDITOR
+        // Diffs the freshly captured live lists against the cached last-known SO state
+        // and applies only the changed/added/removed entries to the SO. No-op if no diff.
+        void ApplyBindingDiffToSO(TimelineAsset asset)
+        {
+            if (asset == null) return;
+            var entry = timelineEntries.Find(e => e.timelineAsset == asset);
+            if (entry?.bindingData == null) return;
+
+            _lastDiffSummary.Clear();
+            bool changed = false;
+
+            // --- trackBindings diff ---
+            var cachedByIndex = new Dictionary<int, string>(_cachedTrackBindings.Count);
+            foreach (var b in _cachedTrackBindings)
+                cachedByIndex[b.trackIndex] = b.id;
+
+            var liveByIndex = new Dictionary<int, string>(trackBindings.Count);
+            foreach (var b in trackBindings)
+                liveByIndex[b.trackIndex] = b.id;
+
+            // Changed or added
+            foreach (var kvp in liveByIndex)
+            {
+                if (!cachedByIndex.TryGetValue(kvp.Key, out var oldId))
+                {
+                    _lastDiffSummary.Add($"track {kvp.Key}: added ({kvp.Value})");
+                    changed = true;
+                }
+                else if (oldId != kvp.Value)
+                {
+                    _lastDiffSummary.Add($"track {kvp.Key}: {oldId} -> {kvp.Value}");
+                    changed = true;
+                }
+            }
+
+            // Removed
+            foreach (var kvp in cachedByIndex)
+            {
+                if (!liveByIndex.ContainsKey(kvp.Key))
+                {
+                    _lastDiffSummary.Add($"track {kvp.Key}: removed ({kvp.Value})");
+                    changed = true;
+                }
+            }
+
+            // --- nestedTimelineBindings diff ---
+            var cachedNestedByKey = new Dictionary<(int, int), NestedTimlineBinding>(_cachedNestedBindings.Count);
+            foreach (var nb in _cachedNestedBindings)
+                cachedNestedByKey[(nb.trackIndex, nb.clipIndex)] = nb;
+
+            var liveNestedByKey = new Dictionary<(int, int), NestedTimlineBinding>(nestedTimelineBindings.Count);
+            foreach (var nb in nestedTimelineBindings)
+                liveNestedByKey[(nb.trackIndex, nb.clipIndex)] = nb;
+
+            foreach (var kvp in liveNestedByKey)
+            {
+                if (!cachedNestedByKey.TryGetValue(kvp.Key, out var oldNb))
+                {
+                    _lastDiffSummary.Add($"nested track {kvp.Key.Item1} clip {kvp.Key.Item2}: added ({kvp.Value.id})");
+                    changed = true;
+                }
+                else if (oldNb.id != kvp.Value.id || oldNb.timelineAsset != kvp.Value.timelineAsset
+                         || !NestedTrackBindingsEqual(oldNb.nestedTimelineTrackBindings, kvp.Value.nestedTimelineTrackBindings))
+                {
+                    _lastDiffSummary.Add($"nested track {kvp.Key.Item1} clip {kvp.Key.Item2}: {oldNb.id} -> {kvp.Value.id}");
+                    changed = true;
+                }
+            }
+
+            foreach (var kvp in cachedNestedByKey)
+            {
+                if (!liveNestedByKey.ContainsKey(kvp.Key))
+                {
+                    _lastDiffSummary.Add($"nested track {kvp.Key.Item1} clip {kvp.Key.Item2}: removed ({kvp.Value.id})");
+                    changed = true;
+                }
+            }
+
+            if (!changed)
+                return;
+
+            FlushBindingsToSO(asset);
+            _lastDiffTime = EditorApplication.timeSinceStartup;
+        }
+
+        static bool NestedTrackBindingsEqual(List<TrackBinding> a, List<TrackBinding> b)
+        {
+            if (a == null || b == null) return a == b;
+            if (a.Count != b.Count) return false;
+            for (int i = 0; i < a.Count; i++)
+                if (a[i].trackIndex != b[i].trackIndex || a[i].id != b[i].id)
+                    return false;
+            return true;
+        }
+#endif
 
         // Copies SO → live lists for the given asset.
         void LoadBindingsFromSO(TimelineAsset asset)
@@ -213,6 +325,15 @@ namespace TLM.TimelineController
             nestedTimelineBindings.Clear();
             trackBindings.AddRange(entry.bindingData.trackBindings);
             nestedTimelineBindings.AddRange(entry.bindingData.nestedTimelineBindings);
+
+#if UNITY_EDITOR
+            _cachedTrackBindings.Clear();
+            foreach (var b in entry.bindingData.trackBindings)
+                _cachedTrackBindings.Add(new TrackBinding { trackIndex = b.trackIndex, id = b.id });
+
+            _cachedNestedBindings.Clear();
+            _cachedNestedBindings.AddRange(entry.bindingData.nestedTimelineBindings);
+#endif
         }
 
         public void AddRuntimeObject(GameObject bindingObject)
@@ -328,7 +449,7 @@ namespace TLM.TimelineController
                 _bindingsDirty = false;
                 UpdateBindingList(playableDirector, trackBindings, false);
                 UpdateNestedTimelineBindingList(playableDirector, nestedTimelineBindings);
-                FlushBindingsToSO(playableDirector.playableAsset as TimelineAsset);
+                ApplyBindingDiffToSO(playableDirector.playableAsset as TimelineAsset);
                 EditorUtility.SetDirty(this);
             }
 

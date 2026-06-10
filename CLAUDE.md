@@ -94,8 +94,19 @@ These are permanent behavioural facts about Unity's Timeline API that must be ke
 ### `TimelineReference.IdMap` is wiped on domain reload
 `IdMap` is a static field — it is reset to empty on every domain reload. `Awake` only fires for objects whose scene was loaded or reloaded after the reload, so objects in always-loaded scenes (e.g. Bootstrap) never re-register via `Awake` alone. `OnEnable` must also call `Register()` since it fires on domain reload for `[ExecuteAlways]` components in already-loaded scenes. `Register()` must guard against duplicate entries.
 
+## Diff-Based SO Autosave
+
+Solves an edge case where a developer on an older branch pulls, opens a scene with stale/empty `TimelineBindingData`, and any incidental scene edit triggers `_bindingsDirty` — recapturing bindings against an uninitialized `IdMap` and overwriting the SO with empty/wrong data, which then gets committed.
+
+**Mechanism:** `LoadBindingsFromSO` snapshots the loaded SO state into `_cachedTrackBindings`/`_cachedNestedBindings` ([NonSerialized], scene-volatile). On every `_bindingsDirty` tick, after `UpdateBindingList`/`UpdateNestedTimelineBindingList` recapture the live lists, `ApplyBindingDiffToSO` compares the fresh capture against the cache:
+- No diff → no SO write at all (regardless of how stale the capture is, if it matches what's cached, nothing changes)
+- Diff found → full flush via `FlushBindingsToSO` (which also re-syncs the cache), and the diff entries are recorded in `_lastDiffSummary` for the Inspector
+
+This makes the SO write a one-cycle, diff-gated event rather than an unconditional per-tick flush. `ResetActiveBindings` and `SetTimeline`'s pre-swap flush remain full, unconditional writes — they're explicit user-triggered rebuilds, not autosave.
+
 ## Future Plans
 
 - **Nested BindingData as sub-asset** — nested timeline bindings (`NestedTimlineBinding`) still live flat inside the parent `TimelineBindingData`; could be embedded as sub-assets like the top-level ones
 - **Subtrack support** — subtracks inside groups are reachable via `GetOutputTrack` but their indices are appended after all root tracks, not at their visual position; a path-based scheme (group index + child index) would be more stable
 - **Track index invalidation detection** — reordering tracks changes stored indices silently; storing track name/type alongside the index would allow a sanity check at install time
+- **Vanilla (no-SO) persistence** — when no `TimelineAssetEntry`/`TimelineBindingData` is assigned for the active asset, `trackBindings`/`nestedTimelineBindings` are pure runtime caches and never persist. The diff/SO-write machinery only applies when a `bindingData` SO is assigned via "Add Current Asset". For the no-SO case, consider making `trackBindings`/`nestedTimelineBindings` `[SerializeField]` again so bindings persist in the scene file as they did before SO support was added — vanilla mode should remain a simple component-serialization workflow, distinct from the SO-backed multi-asset workflow.
