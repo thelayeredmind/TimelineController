@@ -55,6 +55,11 @@ namespace TLM.TimelineController
         // Non-serialized — rebuilt each capture pass.
         readonly HashSet<(int track, int clip)> _selfClipIndices = new HashSet<(int, int)>();
         bool _bindingsDirty = true;
+        // True from OnEnable until the deferred tryLoad completes. Update() must not run a
+        // capture/diff pass while true — until LoadBindingsFromSO + InstallRuntimeBindings have
+        // run, trackBindings/_cachedTrackBindings are empty and the director's bindings haven't
+        // been restored yet, so a capture would see everything as null and diff to "all removed".
+        bool _pendingLoad;
         // Incremented each time InstallRuntimeBindings runs — readable by smoke tests.
         [NonSerialized] public int InstallCount;
         // Snapshot of the last-known SO state, populated on LoadBindingsFromSO.
@@ -104,6 +109,7 @@ namespace TLM.TimelineController
                     return;
 
                 ActiveInScene = true;
+                _pendingLoad = true;
                 playableDirector = GetComponent<PlayableDirector>();
                 ObjectChangeEvents.changesPublished += OnObjectChangesPublished;
                 TimelineReference.OnSceneStateChanged += OnReferencesChanged;
@@ -124,6 +130,7 @@ namespace TLM.TimelineController
                     _bindingsDirty = true;
                     TimelineReference.RegisterAll();
                     InstallRuntimeBindings();
+                    _pendingLoad = false;
                 };
                 EditorApplication.delayCall += tryLoad;
                 return;
@@ -443,6 +450,8 @@ namespace TLM.TimelineController
                 return;
 
             if (!ActiveInScene)
+                return;
+            if (_pendingLoad)
                 return;
             if (_bindingsDirty)
             {
