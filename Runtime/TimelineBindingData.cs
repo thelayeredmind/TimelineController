@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Playables;
 using UnityEngine.Timeline;
@@ -9,6 +9,6 @@ namespace TLM.TimelineController
     public class TimelineBindingData : ScriptableObject
     {
         public List<TrackBinding> trackBindings = new List<TrackBinding>();
-        public List<NestedTimlineBinding> nestedTimelineBindings = new List<NestedTimlineBinding>();
+        public List<ClipBinding> nestedTimelineBindings = new List<ClipBinding>();
     }
 }

@@ -60,7 +60,7 @@ Added `TimelineBindingData` ScriptableObject and `TimelineAssetEntry` list to su
 
 ### MergeRule Pattern
 
-When iterating bindings to update them, objects in unloaded additive scenes resolve to `null`. The rule for what to do with a stale entry is encapsulated in `MergeRule()` overloads — one for `TrackBinding`, one for `NestedTimlineBinding`. They read `additiveSceneWorkflow` (default `true`) on `TimelineController`:
+When iterating bindings to update them, objects in unloaded additive scenes resolve to `null`. The rule for what to do with a stale entry is encapsulated in `MergeRule()` overloads — one for `TrackBinding`, one for `ClipBinding`. They read `additiveSceneWorkflow` (default `true`) on `TimelineController`:
 
 - `true` — skip the unresolvable entry, preserve the stored GUID (binding restores when the scene reloads)
 - `false` — remove the stale entry (classic rebuild behavior)
@@ -76,6 +76,12 @@ When iterating bindings to update them, objects in unloaded additive scenes reso
 Tracks or clips whose bound object is the `TimelineController`'s own GameObject must never be written into `trackBindings` or `nestedTimelineBindings`. The loop index still advances past them (index counting is unaffected), but no entry is stored — Unity handles those bindings natively.
 
 The resolution outcome is encapsulated in `NestedOwnerResolution` (`Missing` / `Self` / `Resolved`). Use `ClassifyNestedOwner()` at capture and `ResolveNestedOwner()` at install. Never add inline `== gameObject` checks outside these two methods.
+
+### ClipBinding (formerly NestedTimlineBinding)
+
+There are only two structural binding dimensions: **track bindings** (`TrackBinding`, `pd.GetGenericBinding(track)`) and **clip bindings** (`ClipBinding`, a Control Track clip's `sourceGameObject` exposed reference). Previously, clip bindings were only captured when the resolved object had its own `PlayableDirector` (i.e. drove a nested timeline) — Control Track clips targeting plain GameObjects (activate/deactivate, trigger components, etc.) were silently skipped and never persisted, so their references were lost across additive scene unload/reload.
+
+`ClipBinding` now captures the `id` for **any** resolved, non-self clip target. `timelineAsset`/`nestedTimelineTrackBindings` are populated only when the target also has a `PlayableDirector` — they're an optional addendum (the target's own track bindings), not a gate on whether the clip binding itself is captured. Install always restores the `sourceGameObject` reference via `SetReferenceValue`/`RebuildGraph`; the nested-director `playableAsset`/track-binding install only runs `if (entry.timelineAsset != null)`.
 
 ### Reset Bindings
 
@@ -106,7 +112,7 @@ This makes the SO write a one-cycle, diff-gated event rather than an uncondition
 
 ## Future Plans
 
-- **Nested BindingData as sub-asset** — nested timeline bindings (`NestedTimlineBinding`) still live flat inside the parent `TimelineBindingData`; could be embedded as sub-assets like the top-level ones
+- **Nested BindingData as sub-asset** — clip bindings (`ClipBinding`) still live flat inside the parent `TimelineBindingData`; could be embedded as sub-assets like the top-level ones
 - **Subtrack support** — subtracks inside groups are reachable via `GetOutputTrack` but their indices are appended after all root tracks, not at their visual position; a path-based scheme (group index + child index) would be more stable
 - **Track index invalidation detection** — reordering tracks changes stored indices silently; storing track name/type alongside the index would allow a sanity check at install time
 - **Vanilla (no-SO) persistence** — when no `TimelineAssetEntry`/`TimelineBindingData` is assigned for the active asset, `trackBindings`/`nestedTimelineBindings` are pure runtime caches and never persist. The diff/SO-write machinery only applies when a `bindingData` SO is assigned via "Add Current Asset". For the no-SO case, consider making `trackBindings`/`nestedTimelineBindings` `[SerializeField]` again so bindings persist in the scene file as they did before SO support was added — vanilla mode should remain a simple component-serialization workflow, distinct from the SO-backed multi-asset workflow.

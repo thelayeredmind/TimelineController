@@ -16,8 +16,11 @@ namespace TLM.TimelineController
         public string id;
     }
 
+    // A Control Track clip's sourceGameObject binding. If the resolved object also has a
+    // PlayableDirector, timelineAsset/nestedTimelineTrackBindings additionally capture its
+    // own track bindings as a nested timeline; otherwise they are null/empty.
     [Serializable]
-    public class NestedTimlineBinding
+    public class ClipBinding
     {
         public int trackIndex;
         public int clipIndex;
@@ -40,7 +43,7 @@ namespace TLM.TimelineController
         [SerializeField]
         bool additiveSceneWorkflow = true;
         List<TrackBinding> trackBindings = new List<TrackBinding>();
-        List<NestedTimlineBinding> nestedTimelineBindings = new List<NestedTimlineBinding>();
+        List<ClipBinding> nestedTimelineBindings = new List<ClipBinding>();
         [SerializeField]
         List<TimelineAssetEntry> timelineEntries = new List<TimelineAssetEntry>();
 
@@ -65,7 +68,7 @@ namespace TLM.TimelineController
         // Snapshot of the last-known SO state, populated on LoadBindingsFromSO.
         // Compared against on each autosave to compute the write diff.
         readonly List<TrackBinding> _cachedTrackBindings = new List<TrackBinding>();
-        readonly List<NestedTimlineBinding> _cachedNestedBindings = new List<NestedTimlineBinding>();
+        readonly List<ClipBinding> _cachedNestedBindings = new List<ClipBinding>();
         // Last diff applied to the SO — readable by the Inspector.
         readonly List<string> _lastDiffSummary = new List<string>();
         // EditorApplication.timeSinceStartup of the last applied diff — drives the transient Inspector message.
@@ -79,7 +82,7 @@ namespace TLM.TimelineController
         public bool ActiveInScene;
         public List<TimelineAssetEntry> TimelineEntries => timelineEntries;
         public IReadOnlyList<TrackBinding> TrackBindings => trackBindings;
-        public IReadOnlyList<NestedTimlineBinding> NestedTimelineBindings => nestedTimelineBindings;
+        public IReadOnlyList<ClipBinding> NestedTimelineBindings => nestedTimelineBindings;
         public IReadOnlyList<string> LastDiffSummary => _lastDiffSummary;
         public double LastDiffTime => _lastDiffTime;
 
@@ -195,7 +198,7 @@ namespace TLM.TimelineController
             OnTimelineChanged?.Invoke(asset);
         }
 
-        // Copies live lists → SO for the given asset (called before swap or on capture)
+        // Copies live lists â†’ SO for the given asset (called before swap or on capture)
         void FlushBindingsToSO(TimelineAsset asset)
         {
             if (asset == null) return;
@@ -267,11 +270,11 @@ namespace TLM.TimelineController
             }
 
             // --- nestedTimelineBindings diff ---
-            var cachedNestedByKey = new Dictionary<(int, int), NestedTimlineBinding>(_cachedNestedBindings.Count);
+            var cachedNestedByKey = new Dictionary<(int, int), ClipBinding>(_cachedNestedBindings.Count);
             foreach (var nb in _cachedNestedBindings)
                 cachedNestedByKey[(nb.trackIndex, nb.clipIndex)] = nb;
 
-            var liveNestedByKey = new Dictionary<(int, int), NestedTimlineBinding>(nestedTimelineBindings.Count);
+            var liveNestedByKey = new Dictionary<(int, int), ClipBinding>(nestedTimelineBindings.Count);
             foreach (var nb in nestedTimelineBindings)
                 liveNestedByKey[(nb.trackIndex, nb.clipIndex)] = nb;
 
@@ -308,7 +311,10 @@ namespace TLM.TimelineController
 
         static bool NestedTrackBindingsEqual(List<TrackBinding> a, List<TrackBinding> b)
         {
-            if (a == null || b == null) return a == b;
+            int aCount = a?.Count ?? 0;
+            int bCount = b?.Count ?? 0;
+            if (aCount == 0 && bCount == 0) return true;
+            if (a == null || b == null) return false;
             if (a.Count != b.Count) return false;
             for (int i = 0; i < a.Count; i++)
                 if (a[i].trackIndex != b[i].trackIndex || a[i].id != b[i].id)
@@ -317,7 +323,7 @@ namespace TLM.TimelineController
         }
 #endif
 
-        // Copies SO → live lists for the given asset.
+        // Copies SO â†’ live lists for the given asset.
         void LoadBindingsFromSO(TimelineAsset asset)
         {
             if (asset == null) return;
@@ -607,7 +613,7 @@ namespace TLM.TimelineController
             return false;
         }
 
-        void UpdateNestedTimelineBindingList(PlayableDirector pd, List<NestedTimlineBinding> nestedTimelineBindings)
+        void UpdateNestedTimelineBindingList(PlayableDirector pd, List<ClipBinding> nestedTimelineBindings)
         {
             var timelineAsset = pd.playableAsset as TimelineAsset;
             if (timelineAsset == null)
@@ -639,10 +645,6 @@ namespace TLM.TimelineController
                             continue;
                     }
 
-                    PlayableDirector resolvedDirector = resolvedObj.GetComponent<PlayableDirector>();
-                    if (resolvedDirector == null)
-                        continue;
-
                     if (IsChildOf(resolvedObj.transform, transform))
                         continue;
 
@@ -665,19 +667,29 @@ namespace TLM.TimelineController
                         }
                     }
 
-                    List<TrackBinding> nestedTrackBindings = new List<TrackBinding>();
                     int existingIndex = nestedTimelineBindings.FindIndex(b => b.trackIndex == trackIndex && b.clipIndex == clipIndex);
-                    if (existingIndex >= 0)
-                        nestedTrackBindings = nestedTimelineBindings[existingIndex].nestedTimelineTrackBindings;
 
-                    UpdateBindingList(resolvedDirector, nestedTrackBindings, true);
+                    // Only resolved objects with their own PlayableDirector also carry nested
+                    // timeline track bindings; plain Control Track targets get id only.
+                    PlayableDirector resolvedDirector = resolvedObj.GetComponent<PlayableDirector>();
+                    PlayableAsset nestedTimelineAsset = null;
+                    List<TrackBinding> nestedTrackBindings = null;
+                    if (resolvedDirector != null)
+                    {
+                        nestedTrackBindings = new List<TrackBinding>();
+                        if (existingIndex >= 0)
+                            nestedTrackBindings = nestedTimelineBindings[existingIndex].nestedTimelineTrackBindings ?? nestedTrackBindings;
 
-                    var entry = new NestedTimlineBinding()
+                        UpdateBindingList(resolvedDirector, nestedTrackBindings, true);
+                        nestedTimelineAsset = resolvedDirector.playableAsset;
+                    }
+
+                    var entry = new ClipBinding()
                     {
                         trackIndex = trackIndex,
                         clipIndex = clipIndex,
                         id = timelineRef.Id,
-                        timelineAsset = resolvedDirector.playableAsset,
+                        timelineAsset = nestedTimelineAsset,
                         nestedTimelineTrackBindings = nestedTrackBindings,
                     };
 
@@ -710,7 +722,7 @@ namespace TLM.TimelineController
             return NestedOwnerResolution.Resolved;
         }
 
-        void MergeRule(List<NestedTimlineBinding> list, int trackIndex, int clipIndex)
+        void MergeRule(List<ClipBinding> list, int trackIndex, int clipIndex)
         {
             if (!additiveSceneWorkflow)
             {
@@ -795,8 +807,8 @@ namespace TLM.TimelineController
 
             for (int i = 0; i < nestedTimelineBindings.Count; i++)
             {
-                NestedTimlineBinding entry = nestedTimelineBindings[i];
-                if (entry.timelineAsset == null || string.IsNullOrEmpty(entry.id))
+                ClipBinding entry = nestedTimelineBindings[i];
+                if (string.IsNullOrEmpty(entry.id))
                     continue;
 
                 var resolution = ResolveNestedOwner(entry.id, out GameObject owner);
@@ -824,22 +836,25 @@ namespace TLM.TimelineController
 
                 if (clipAsset == null)
                 {
-                    Debug.LogWarningFormat("NestedTimeline: no ControlPlayableAsset at track {0} clip {1} in {2}", entry.trackIndex, entry.clipIndex, timelineAsset);
+                    Debug.LogWarningFormat("ClipBinding: no ControlPlayableAsset at track {0} clip {1} in {2}", entry.trackIndex, entry.clipIndex, timelineAsset);
                     continue;
                 }
 
-                PlayableDirector nestedDirector = owner.GetComponent<PlayableDirector>();
-
-                if (nestedDirector.playableAsset != entry.timelineAsset)
-                    nestedDirector.playableAsset = entry.timelineAsset;
-
-                foreach (var binding in entry.nestedTimelineTrackBindings)
+                if (entry.timelineAsset != null)
                 {
-                    if (string.IsNullOrEmpty(binding.id))
-                        Debug.LogWarningFormat("Bind child timeline failed, empty id: {0}, {1}",
-                            nestedDirector.playableAsset.ToString(), playableDirector.playableAsset.ToString());
-                    else
-                        BindTrack(nestedDirector, binding);
+                    PlayableDirector nestedDirector = owner.GetComponent<PlayableDirector>();
+
+                    if (nestedDirector.playableAsset != entry.timelineAsset)
+                        nestedDirector.playableAsset = entry.timelineAsset;
+
+                    foreach (var binding in entry.nestedTimelineTrackBindings)
+                    {
+                        if (string.IsNullOrEmpty(binding.id))
+                            Debug.LogWarningFormat("Bind child timeline failed, empty id: {0}, {1}",
+                                nestedDirector.playableAsset.ToString(), playableDirector.playableAsset.ToString());
+                        else
+                            BindTrack(nestedDirector, binding);
+                    }
                 }
 
                 // SetReferenceValue only takes effect if the graph is rebuilt — save and restore time to avoid resetting A.

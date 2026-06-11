@@ -146,7 +146,7 @@ namespace TLM.TimelineController
             var nestedBindings = timelineController.NestedTimelineBindings;
             if (nestedBindings.Count > 0)
             {
-                EditorGUILayout.LabelField("Nested Timeline Bindings (runtime cache)", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField("Clip Bindings (runtime cache)", EditorStyles.boldLabel);
                 using (new EditorGUI.DisabledGroupScope(true))
                 {
                     foreach (var nb in nestedBindings)
