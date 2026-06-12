@@ -323,6 +323,10 @@ namespace TLM.TimelineController
                 if (clipAsset == null)
                     continue;
 
+                var current = clipAsset.sourceGameObject.Resolve(playableDirector);
+                if (current == owner)
+                    continue;
+
                 // SetReferenceValue only takes effect if the graph is rebuilt — save and restore
                 // time so the rebuild doesn't reset playback position.
                 double savedTime = playableDirector.time;
