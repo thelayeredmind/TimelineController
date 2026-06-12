@@ -69,6 +69,10 @@ namespace TLM.TimelineController
         // Compared against on each autosave to compute the write diff.
         readonly List<TrackBinding> _cachedTrackBindings = new List<TrackBinding>();
         readonly List<ClipBinding> _cachedNestedBindings = new List<ClipBinding>();
+        // Binding ids that InstallRuntimeBindings has successfully resolved to a live object
+        // at least once since load. A binding only participates in the SO diff once confirmed —
+        // until then its target scene may simply not be loaded yet, which is not a user change.
+        readonly HashSet<string> _confirmedBindingIds = new HashSet<string>();
         // Last diff applied to the SO — readable by the Inspector.
         readonly List<string> _lastDiffSummary = new List<string>();
         // EditorApplication.timeSinceStartup of the last applied diff — drives the transient Inspector message.
@@ -85,6 +89,7 @@ namespace TLM.TimelineController
         public IReadOnlyList<ClipBinding> NestedTimelineBindings => nestedTimelineBindings;
         public IReadOnlyList<string> LastDiffSummary => _lastDiffSummary;
         public double LastDiffTime => _lastDiffTime;
+        public IReadOnlyCollection<string> ConfirmedBindingIds => _confirmedBindingIds;
 
         void OnValidate()
         {
@@ -244,16 +249,22 @@ namespace TLM.TimelineController
             foreach (var b in trackBindings)
                 liveByIndex[b.trackIndex] = b.id;
 
-            // Changed or added
+            // Changed or added — only for ids InstallRuntimeBindings has confirmed resolvable
+            // this session. An unconfirmed id may simply belong to a not-yet-loaded scene;
+            // its absence/divergence from the cache is not a real user change.
             foreach (var kvp in liveByIndex)
             {
                 if (!cachedByIndex.TryGetValue(kvp.Key, out var oldId))
                 {
+                    if (!_confirmedBindingIds.Contains(kvp.Value))
+                        continue;
                     _lastDiffSummary.Add($"track {kvp.Key}: added ({kvp.Value})");
                     changed = true;
                 }
                 else if (oldId != kvp.Value)
                 {
+                    if (!_confirmedBindingIds.Contains(oldId) && !_confirmedBindingIds.Contains(kvp.Value))
+                        continue;
                     _lastDiffSummary.Add($"track {kvp.Key}: {oldId} -> {kvp.Value}");
                     changed = true;
                 }
@@ -264,6 +275,8 @@ namespace TLM.TimelineController
             {
                 if (!liveByIndex.ContainsKey(kvp.Key))
                 {
+                    if (!_confirmedBindingIds.Contains(kvp.Value))
+                        continue;
                     _lastDiffSummary.Add($"track {kvp.Key}: removed ({kvp.Value})");
                     changed = true;
                 }
@@ -282,12 +295,16 @@ namespace TLM.TimelineController
             {
                 if (!cachedNestedByKey.TryGetValue(kvp.Key, out var oldNb))
                 {
+                    if (!_confirmedBindingIds.Contains(kvp.Value.id))
+                        continue;
                     _lastDiffSummary.Add($"nested track {kvp.Key.Item1} clip {kvp.Key.Item2}: added ({kvp.Value.id})");
                     changed = true;
                 }
                 else if (oldNb.id != kvp.Value.id || oldNb.timelineAsset != kvp.Value.timelineAsset
                          || !NestedTrackBindingsEqual(oldNb.nestedTimelineTrackBindings, kvp.Value.nestedTimelineTrackBindings))
                 {
+                    if (!_confirmedBindingIds.Contains(oldNb.id) && !_confirmedBindingIds.Contains(kvp.Value.id))
+                        continue;
                     _lastDiffSummary.Add($"nested track {kvp.Key.Item1} clip {kvp.Key.Item2}: {oldNb.id} -> {kvp.Value.id}");
                     changed = true;
                 }
@@ -297,6 +314,8 @@ namespace TLM.TimelineController
             {
                 if (!liveNestedByKey.ContainsKey(kvp.Key))
                 {
+                    if (!_confirmedBindingIds.Contains(kvp.Value.id))
+                        continue;
                     _lastDiffSummary.Add($"nested track {kvp.Key.Item1} clip {kvp.Key.Item2}: removed ({kvp.Value.id})");
                     changed = true;
                 }
@@ -305,8 +324,43 @@ namespace TLM.TimelineController
             if (!changed)
                 return;
 
+            // Before flushing, restore any unconfirmed live entries to their cached SO value —
+            // an unconfirmed entry's live state (e.g. missing because its scene isn't loaded)
+            // must not overwrite a previously-saved binding just because another entry changed.
+            RestoreUnconfirmedEntries(cachedByIndex, cachedNestedByKey);
+
             FlushBindingsToSO(asset);
             _lastDiffTime = EditorApplication.timeSinceStartup;
+        }
+
+        // Re-applies cached (last-saved) values to live lists for entries whose id has never
+        // been confirmed resolvable this session, so a flush triggered by an unrelated confirmed
+        // change doesn't also overwrite these still-unloaded entries with their live (missing) state.
+        void RestoreUnconfirmedEntries(Dictionary<int, string> cachedByIndex, Dictionary<(int, int), ClipBinding> cachedNestedByKey)
+        {
+            foreach (var kvp in cachedByIndex)
+            {
+                if (_confirmedBindingIds.Contains(kvp.Value))
+                    continue;
+
+                var existing = trackBindings.Find(b => b.trackIndex == kvp.Key);
+                if (existing != null)
+                    existing.id = kvp.Value;
+                else
+                    trackBindings.Add(new TrackBinding { trackIndex = kvp.Key, id = kvp.Value });
+            }
+
+            foreach (var kvp in cachedNestedByKey)
+            {
+                if (_confirmedBindingIds.Contains(kvp.Value.id))
+                    continue;
+
+                int existingIndex = nestedTimelineBindings.FindIndex(b => b.trackIndex == kvp.Key.Item1 && b.clipIndex == kvp.Key.Item2);
+                if (existingIndex >= 0)
+                    nestedTimelineBindings[existingIndex] = kvp.Value;
+                else
+                    nestedTimelineBindings.Add(kvp.Value);
+            }
         }
 
         static bool NestedTrackBindingsEqual(List<TrackBinding> a, List<TrackBinding> b)
@@ -346,6 +400,10 @@ namespace TLM.TimelineController
 
             _cachedNestedBindings.Clear();
             _cachedNestedBindings.AddRange(entry.bindingData.nestedTimelineBindings);
+
+            // Freshly loaded bindings haven't round-tripped through InstallRuntimeBindings yet —
+            // none are confirmed until they're proven resolvable in this session.
+            _confirmedBindingIds.Clear();
 #endif
         }
 
@@ -802,7 +860,11 @@ namespace TLM.TimelineController
                     continue;
                 if (ResolveNestedOwner(entry.id, out _) == NestedOwnerResolution.Self)
                     continue;
-                BindTrack(playableDirector, entry);
+                bool bound = BindTrack(playableDirector, entry);
+#if UNITY_EDITOR
+                if (bound)
+                    _confirmedBindingIds.Add(entry.id);
+#endif
             }
 
             for (int i = 0; i < nestedTimelineBindings.Count; i++)
@@ -814,6 +876,9 @@ namespace TLM.TimelineController
                 var resolution = ResolveNestedOwner(entry.id, out GameObject owner);
                 if (resolution != NestedOwnerResolution.Resolved)
                     continue;
+#if UNITY_EDITOR
+                _confirmedBindingIds.Add(entry.id);
+#endif
 
                 TimelineAsset timelineAsset = playableDirector.playableAsset as TimelineAsset;
                 if (entry.trackIndex >= timelineAsset.outputTrackCount)

@@ -127,31 +127,29 @@ namespace TLM.TimelineController
 
             EditorGUILayout.Space();
 
-            // --- Runtime cache (read-only, populated from SO on OnEnable) ---
-            EditorGUILayout.LabelField("Track Bindings (runtime cache)", EditorStyles.boldLabel);
-            var trackBindings = timelineController.TrackBindings;
-            if (trackBindings.Count == 0)
+            // --- SO contents (ground truth) — green if confirmed (resolved by
+            // InstallRuntimeBindings this session), red if not yet confirmed. ---
+            var confirmedIds = timelineController.ConfirmedBindingIds;
+            var activeEntry = entries.Find(e => e.timelineAsset == currentAsset);
+            var soTrackBindings = activeEntry?.bindingData?.trackBindings;
+            var soNestedBindings = activeEntry?.bindingData?.nestedTimelineBindings;
+
+            EditorGUILayout.LabelField("Track Bindings (from SO)", EditorStyles.boldLabel);
+            if (soTrackBindings == null || soTrackBindings.Count == 0)
             {
-                EditorGUILayout.HelpBox("No bindings loaded.", MessageType.None);
+                EditorGUILayout.HelpBox("No bindings in SO.", MessageType.None);
             }
             else
             {
-                using (new EditorGUI.DisabledGroupScope(true))
-                {
-                    foreach (var b in trackBindings)
-                        EditorGUILayout.LabelField($"  track {b.trackIndex}", b.id);
-                }
+                foreach (var b in soTrackBindings)
+                    DrawBindingRow($"  track {b.trackIndex}", b.id, confirmedIds.Contains(b.id));
             }
 
-            var nestedBindings = timelineController.NestedTimelineBindings;
-            if (nestedBindings.Count > 0)
+            if (soNestedBindings != null && soNestedBindings.Count > 0)
             {
-                EditorGUILayout.LabelField("Clip Bindings (runtime cache)", EditorStyles.boldLabel);
-                using (new EditorGUI.DisabledGroupScope(true))
-                {
-                    foreach (var nb in nestedBindings)
-                        EditorGUILayout.LabelField($"  track {nb.trackIndex} clip {nb.clipIndex}", nb.id);
-                }
+                EditorGUILayout.LabelField("Clip Bindings (from SO)", EditorStyles.boldLabel);
+                foreach (var nb in soNestedBindings)
+                    DrawBindingRow($"  track {nb.trackIndex} clip {nb.clipIndex}", nb.id, confirmedIds.Contains(nb.id));
             }
 
             // --- Binding change status ---
@@ -178,6 +176,32 @@ namespace TLM.TimelineController
             EditorGUILayout.Space();
             using (new EditorGUI.DisabledGroupScope(true))
                 base.OnInspectorGUI();
+        }
+
+        // Confirmed = resolved by InstallRuntimeBindings at least once this session, so it's
+        // eligible for SO diff/write. Unconfirmed entries (target scene not loaded yet) are
+        // preserved as-is and shown in red. Baked into GUIStyle.normal/onNormal because
+        // GUI.contentColor is overridden by the skin while GUI.enabled is false.
+        static readonly Color ConfirmedColor = new Color(0.4f, 1f, 0.4f);
+        static readonly Color UnconfirmedColor = new Color(1f, 0.35f, 0.35f);
+        static GUIStyle _confirmedStyle;
+        static GUIStyle _unconfirmedStyle;
+
+        static void DrawBindingRow(string label, string id, bool confirmed)
+        {
+            if (_confirmedStyle == null)
+            {
+                _confirmedStyle = new GUIStyle(EditorStyles.label);
+                _confirmedStyle.normal.textColor = ConfirmedColor;
+                _confirmedStyle.onNormal.textColor = ConfirmedColor;
+
+                _unconfirmedStyle = new GUIStyle(EditorStyles.label);
+                _unconfirmedStyle.normal.textColor = UnconfirmedColor;
+                _unconfirmedStyle.onNormal.textColor = UnconfirmedColor;
+            }
+
+            var style = confirmed ? _confirmedStyle : _unconfirmedStyle;
+            EditorGUILayout.LabelField(label, id, style);
         }
 
         static TimelineBindingData CreateBindingDataAsset(TimelineAsset timelineAsset)

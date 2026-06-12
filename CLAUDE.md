@@ -110,6 +110,16 @@ Solves an edge case where a developer on an older branch pulls, opens a scene wi
 
 This makes the SO write a one-cycle, diff-gated event rather than an unconditional per-tick flush. `ResetActiveBindings` and `SetTimeline`'s pre-swap flush remain full, unconditional writes — they're explicit user-triggered rebuilds, not autosave.
 
+### Confirmed-Binding Gate
+
+Solves an edge case where the additive scene holding a bound object isn't loaded yet when `LoadBindingsFromSO` runs. The live capture sees that binding as missing/null even though nothing actually changed — `ApplyBindingDiffToSO` would otherwise treat this as "removed" and overwrite the SO, permanently losing the GUID.
+
+**Mechanism:** `_confirmedBindingIds` (editor-only) tracks binding ids that `InstallRuntimeBindings` has actually resolved to a live object at least once this session — i.e. the binding round-tripped through the timeline successfully. `LoadBindingsFromSO` clears this set (a fresh load has confirmed nothing yet); `InstallRuntimeBindings` adds an id when `BindTrack` succeeds (track bindings) or `ResolveNestedOwner` returns `Resolved` (clip bindings).
+
+`ApplyBindingDiffToSO` only treats an added/changed/removed entry as a real diff if its id (old or new) is in `_confirmedBindingIds`. An entry whose target scene has never loaded this session stays untouched — added/removed/changed for that entry is ignored entirely, even if some other confirmed entry's diff triggers a flush. `RestoreUnconfirmedEntries` re-applies the cached SO value to any unconfirmed entry before that flush, so the write doesn't collaterally erase still-unloaded bindings.
+
+In short: a binding only participates in SO writes once it has been correctly restored to the timeline at least once — only then can a subsequent divergence be considered a conscious user change.
+
 ## Future Plans
 
 - **Nested BindingData as sub-asset** — clip bindings (`ClipBinding`) still live flat inside the parent `TimelineBindingData`; could be embedded as sub-assets like the top-level ones
