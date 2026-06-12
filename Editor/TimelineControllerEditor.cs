@@ -14,7 +14,9 @@ namespace TLM.TimelineController
 
         private void OnEnable()
         {
-            timelineController = serializedObject.targetObject as TimelineController;
+            timelineController = target as TimelineController;
+            if (timelineController == null)
+                return;
             director = timelineController.GetComponent<PlayableDirector>();
         }
 
@@ -22,6 +24,9 @@ namespace TLM.TimelineController
 
         public override void OnInspectorGUI()
         {
+            if (timelineController == null || director == null)
+                return;
+
             if (timelineController.gameObject.scene == null || !timelineController.gameObject.scene.isLoaded)
             {
                 using (new EditorGUI.DisabledGroupScope(true))

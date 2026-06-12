@@ -198,8 +198,17 @@ namespace TLM.TimelineController
                     continue;
                 }
 
+                // MarkerTrack's GetGenericBinding can return a spurious non-null binding even
+                // when visually empty (see CLAUDE.md). Only skip it if it has no real output
+                // (e.g. a plain marker-only track) — a Signal Track is also a MarkerTrack but
+                // has a SignalReceiver output and must be captured/installed like any other track.
                 if (track is MarkerTrack)
-                    continue;
+                {
+                    bool hasOutput = false;
+                    foreach (var _ in track.outputs) { hasOutput = true; break; }
+                    if (!hasOutput)
+                        continue;
+                }
 
                 string trackType = track.GetType().Name;
                 var occKey = (groupPath, track.name, trackType);
@@ -241,6 +250,8 @@ namespace TLM.TimelineController
                 break;
             }
 
+            Debug.Log($"[TimelineController] BindTrack '{trackAsset.name}' ({trackAsset.GetType().Name}) outputType={outputType}");
+
             if (outputType == null)
                 return false;
 
@@ -251,7 +262,10 @@ namespace TLM.TimelineController
 
             GameObject bindTarget = GetBindTarget(id);
             if (bindTarget == null)
+            {
+                Debug.Log($"[TimelineController] BindTrack '{trackAsset.name}' bindTarget null for id {id}");
                 return false;
+            }
 
             if (bindTarget == gameObject)
                 return false;
@@ -259,6 +273,8 @@ namespace TLM.TimelineController
             UnityEngine.Object target = bindTarget;
             if (isComponent)
                 target = bindTarget.GetComponent(outputType);
+
+            Debug.Log($"[TimelineController] BindTrack '{trackAsset.name}' bindTarget={bindTarget.name} target={target}");
 
             var oldBinding = pd.GetGenericBinding(trackAsset);
             if (oldBinding != target)
