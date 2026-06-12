@@ -131,8 +131,17 @@ namespace TLM.TimelineController
             // InstallRuntimeBindings this session), red if not yet confirmed. ---
             var confirmedIds = timelineController.ConfirmedBindingIds;
             var activeEntry = entries.Find(e => e.timelineAsset == currentAsset);
-            var soTrackBindings = activeEntry?.bindingData?.trackBindings;
-            var soNestedBindings = activeEntry?.bindingData?.nestedTimelineBindings;
+            var activeBindingData = activeEntry?.bindingData;
+            // entry.bindingData can be an unresolved cross-asset reference even though the
+            // sub-asset exists in the .playable file (see CLAUDE.md async-resolve note) —
+            // fall back to loading it directly from the asset for display purposes.
+            if (activeBindingData == null && activeEntry?.timelineAsset != null)
+            {
+                var path = AssetDatabase.GetAssetPath(activeEntry.timelineAsset);
+                activeBindingData = AssetDatabase.LoadAllAssetsAtPath(path).OfType<TimelineBindingData>().FirstOrDefault();
+            }
+            var soTrackBindings = activeBindingData?.trackBindings;
+            var soNestedBindings = activeBindingData?.nestedTimelineBindings;
 
             EditorGUILayout.LabelField("Track Bindings (from SO)", EditorStyles.boldLabel);
             if (soTrackBindings == null || soTrackBindings.Count == 0)
@@ -210,8 +219,11 @@ namespace TLM.TimelineController
             data.name = "BindingData";
             AssetDatabase.AddObjectToAsset(data, timelineAsset);
             AssetDatabase.SaveAssets();
-            AssetDatabase.ImportAsset(AssetDatabase.GetAssetPath(timelineAsset));
-            return data;
+            var path = AssetDatabase.GetAssetPath(timelineAsset);
+            AssetDatabase.ImportAsset(path);
+            // ImportAsset can reload/reinstantiate sub-assets, invalidating `data` — re-fetch
+            // the persisted instance so the reference we return/assign is the live one.
+            return AssetDatabase.LoadAllAssetsAtPath(path).OfType<TimelineBindingData>().FirstOrDefault(d => d.name == "BindingData");
         }
 
         // Destroys all existing TimelineBindingData sub-assets inside the .playable file,

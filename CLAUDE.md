@@ -87,6 +87,8 @@ There are only two structural binding dimensions: **track bindings** (`TrackBind
 
 `ResetActiveBindings()` (#if UNITY_EDITOR) clears the live lists and the active timeline's `BindingData` SO, then immediately re-captures from the current scene state. Exposed as a red button in the Inspector. Use this whenever the timeline's track layout changes and stored indices go stale.
 
+**`CreateBindingDataAsset`/`RebuildBindingDataAsset` fileID trap:** `AssetDatabase.AddObjectToAsset` does not assign a final persistent fileID until the asset round-trips through `SaveAssets`/`ImportAsset`. Calling `AssetDatabase.ImportAsset(path)` on the same frame as `AddObjectToAsset` can reload/reinstantiate the sub-asset, so the in-memory `data` reference returned by `CreateBindingDataAsset` becomes stale. Assigning that stale reference to `entry.bindingData` on the scene's `TimelineController` serializes a broken cross-asset reference — the sub-asset is visible in the Project window but `entry.bindingData` resolves to null after reload. Fix: after `ImportAsset`, re-fetch the sub-asset via `AssetDatabase.LoadAllAssetsAtPath(path).OfType<TimelineBindingData>()` and return *that* instance, never the pre-reimport reference.
+
 ## Unity API Invariants
 
 These are permanent behavioural facts about Unity's Timeline API that must be kept in mind when working on this package.
