@@ -31,30 +31,88 @@ namespace TLM.TimelineController
 
             EditorGUILayout.Space();
 
-            var bindingData = timelineController.BindingData;
             var currentAsset = director.playableAsset as TimelineAsset;
+            var entries = timelineController.TimelineEntries;
 
-            if (bindingData == null)
+            // --- Timeline entry navigator ---
+            EditorGUILayout.LabelField("Timeline Assets", EditorStyles.boldLabel);
+
+            for (int i = 0; i < entries.Count; i++)
             {
-                EditorGUILayout.HelpBox("No Binding Data assigned.", MessageType.Warning);
-                if (GUILayout.Button("Create Binding Data"))
+                var entry = entries[i];
+                bool isActive = entry.timelineAsset == currentAsset;
+                string label = entry.timelineAsset != null ? entry.timelineAsset.name : "(none)";
+
+                EditorGUILayout.BeginHorizontal();
+
+                using (new EditorGUI.DisabledGroupScope(isActive))
                 {
-                    if (currentAsset == null)
+                    if (GUILayout.Button(isActive ? $"[ {label} ]" : label))
                     {
-                        EditorUtility.DisplayDialog("No Asset", "Assign a TimelineAsset to the PlayableDirector first.", "OK");
-                    }
-                    else
-                    {
-                        Undo.RecordObject(timelineController, "Create Binding Data");
-                        var data = CreateBindingDataAsset(currentAsset);
-                        var so = serializedObject;
-                        so.Update();
-                        so.FindProperty("bindingData").objectReferenceValue = data;
-                        so.ApplyModifiedProperties();
+                        Undo.RecordObject(director, "Switch Timeline Asset");
+                        Undo.RecordObject(timelineController, "Switch Timeline Asset");
+                        timelineController.SetTimeline(entry.timelineAsset);
+                        EditorUtility.SetDirty(director);
                         EditorUtility.SetDirty(timelineController);
                     }
                 }
 
+                if (GUILayout.Button("✕", GUILayout.Width(22)))
+                {
+                    Undo.RecordObject(timelineController, "Remove Timeline Entry");
+                    entries.RemoveAt(i);
+                    EditorUtility.SetDirty(timelineController);
+                    break;
+                }
+
+                EditorGUILayout.EndHorizontal();
+            }
+
+            EditorGUILayout.Space();
+
+            // --- Add entry from current director asset ---
+            if (GUILayout.Button("Add Current Asset"))
+            {
+                if (currentAsset == null)
+                {
+                    EditorUtility.DisplayDialog("No Asset", "Assign a TimelineAsset to the PlayableDirector first.", "OK");
+                }
+                else if (entries.Exists(e => e.timelineAsset == currentAsset))
+                {
+                    EditorUtility.DisplayDialog("Already Added", $"{currentAsset.name} is already in the list.", "OK");
+                }
+                else
+                {
+                    Undo.RecordObject(timelineController, "Add Timeline Entry");
+                    var data = CreateBindingDataAsset(currentAsset);
+                    entries.Add(new TimelineAssetEntry { timelineAsset = currentAsset, bindingData = data });
+                    EditorUtility.SetDirty(timelineController);
+                    timelineController.SetTimeline(currentAsset, true);
+                }
+            }
+
+            EditorGUILayout.Space();
+
+            var bindingData = timelineController.BindingData;
+            if (bindingData == null)
+            {
+                var activeEntryMissing = entries.Find(e => e.timelineAsset == currentAsset);
+                if (activeEntryMissing != null)
+                {
+                    EditorGUILayout.HelpBox("Binding Data reference is missing or broken for this timeline asset.", MessageType.Warning);
+                    if (GUILayout.Button("Repair Binding Data"))
+                    {
+                        Undo.RecordObject(timelineController, "Repair Timeline Binding Data");
+                        var freshData = CreateBindingDataAsset(currentAsset);
+                        activeEntryMissing.bindingData = freshData;
+                        EditorUtility.SetDirty(timelineController);
+                        timelineController.ResetBindings(freshData);
+                    }
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox("No Binding Data for the active timeline asset. Use \"Add Current Asset\" above.", MessageType.Warning);
+                }
                 EditorGUILayout.Space();
                 using (new EditorGUI.DisabledGroupScope(true))
                     base.OnInspectorGUI();
@@ -69,11 +127,16 @@ namespace TLM.TimelineController
                 GUI.backgroundColor = prevColor;
                 if (EditorUtility.DisplayDialog(
                     "Reset Bindings",
-                    "This will clear all stored bindings and re-capture from the current scene state. Stale entries will be discarded.\n\nThis cannot be undone.",
+                    "This will destroy ALL existing BindingData sub-assets for this timeline, create a fresh one, and re-capture bindings from the current scene state.\n\nThis cannot be undone.",
                     "Reset", "Cancel"))
                 {
                     Undo.RecordObject(timelineController, "Reset Timeline Bindings");
-                    timelineController.ResetBindings();
+                    var freshData = CreateBindingDataAsset(currentAsset);
+                    var activeEntry = entries.Find(e => e.timelineAsset == currentAsset);
+                    if (activeEntry != null)
+                        activeEntry.bindingData = freshData;
+                    EditorUtility.SetDirty(timelineController);
+                    timelineController.ResetBindings(freshData);
                 }
             }
             GUI.backgroundColor = prevColor;
@@ -150,13 +213,22 @@ namespace TLM.TimelineController
             EditorGUILayout.LabelField(label, id, style);
         }
 
+        // Destroys any existing TimelineBindingData sub-assets inside timelineAsset, then
+        // creates and returns a single fresh one. Prevents duplicate BindingData sub-assets
+        // from accumulating if this is called more than once for the same asset.
         static TimelineBindingData CreateBindingDataAsset(TimelineAsset timelineAsset)
         {
+            var path = AssetDatabase.GetAssetPath(timelineAsset);
+            foreach (var existing in AssetDatabase.LoadAllAssetsAtPath(path).OfType<TimelineBindingData>().ToList())
+            {
+                AssetDatabase.RemoveObjectFromAsset(existing);
+                DestroyImmediate(existing, true);
+            }
+
             var data = ScriptableObject.CreateInstance<TimelineBindingData>();
             data.name = "BindingData";
             AssetDatabase.AddObjectToAsset(data, timelineAsset);
             AssetDatabase.SaveAssets();
-            var path = AssetDatabase.GetAssetPath(timelineAsset);
             AssetDatabase.ImportAsset(path);
             // ImportAsset can reload/reinstantiate sub-assets, invalidating `data` — re-fetch
             // the persisted instance so the reference we return/assign is the live one.

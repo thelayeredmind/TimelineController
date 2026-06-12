@@ -9,17 +9,27 @@ using UnityEditor;
 
 namespace TLM.TimelineController
 {
+    [Serializable]
+    public class TimelineAssetEntry
+    {
+        public TimelineAsset timelineAsset;
+        public TimelineBindingData bindingData;
+    }
+
     [RequireComponent(typeof(PlayableDirector))]
     [ExecuteAlways]
     public class TimelineController : MonoBehaviour
     {
         [SerializeField]
+        List<TimelineAssetEntry> timelineEntries = new List<TimelineAssetEntry>();
+        // Active entry's bindingData — pure runtime cache, rebuilt on OnEnable/SetTimeline.
         TimelineBindingData bindingData;
 
         PlayableDirector playableDirector;
         Action onComplete;
         Dictionary<string, GameObject> runtimeObjMap = new Dictionary<string, GameObject>();
         List<TimelineReference> timelineReferences = new List<TimelineReference>(10);
+        PlayableAsset _lastKnownAsset;
         // Set by OnSceneStateChanged; cleared in Update/LateUpdate after sweep + install.
         bool _referencesDirty;
 #if UNITY_EDITOR
@@ -34,6 +44,7 @@ namespace TLM.TimelineController
 #if UNITY_EDITOR
         [NonSerialized]
         public bool ActiveInScene;
+        public List<TimelineAssetEntry> TimelineEntries => timelineEntries;
         public TimelineBindingData BindingData => bindingData;
 
         void OnValidate()
@@ -66,15 +77,20 @@ namespace TLM.TimelineController
                 playableDirector = GetComponent<PlayableDirector>();
                 ObjectChangeEvents.changesPublished += OnObjectChangesPublished;
                 TimelineReference.OnSceneStateChanged += OnReferencesChanged;
-                // bindingData is a cross-asset reference Unity resolves asynchronously after
-                // OnEnable. Retry each editor tick until it's non-null (max 10 ticks).
+                // playableAsset and the bindingData sub-asset reference inside timelineEntries
+                // are cross-asset references Unity resolves asynchronously after OnEnable.
+                // Retry each editor tick until both are non-null (max 10 ticks).
                 int retriesLeft = 10;
                 EditorApplication.CallbackFunction tryLoad = null;
                 tryLoad = () =>
                 {
                     if (this == null) { EditorApplication.delayCall -= tryLoad; return; }
-                    if (bindingData == null && --retriesLeft > 0) return;
+                    var asset = playableDirector.playableAsset as TimelineAsset;
+                    var entry = asset != null ? timelineEntries.Find(e => e.timelineAsset == asset) : null;
+                    if (entry?.bindingData == null && --retriesLeft > 0) return;
                     EditorApplication.delayCall -= tryLoad;
+                    _lastKnownAsset = playableDirector.playableAsset;
+                    bindingData = entry?.bindingData;
                     _bindingsDirty = true;
                     TimelineReference.RegisterAll();
                     InstallRuntimeBindings();
@@ -96,8 +112,16 @@ namespace TLM.TimelineController
                 return;
 #endif
             // All Awakes have fired — safe to sweep for any missed inactive references then install.
+            _lastKnownAsset = playableDirector.playableAsset;
+            bindingData = FindBindingData(playableDirector.playableAsset as TimelineAsset);
             TimelineReference.RegisterAll();
             InstallRuntimeBindings();
+        }
+
+        TimelineBindingData FindBindingData(TimelineAsset asset)
+        {
+            if (asset == null) return null;
+            return timelineEntries.Find(e => e.timelineAsset == asset)?.bindingData;
         }
 
         private void OnDisable()
@@ -123,6 +147,21 @@ namespace TLM.TimelineController
             InstallRuntimeBindings();
             playableDirector.Play();
             this.onComplete = onComplete;
+        }
+
+        // Swaps the active TimelineAsset on the director, loads the matching bindingData
+        // (if any) and installs its bindings.
+        public void SetTimeline(TimelineAsset asset, bool playableAssigned = false)
+        {
+            if (!playableAssigned)
+                playableDirector.playableAsset = asset;
+
+            _lastKnownAsset = asset;
+            bindingData = FindBindingData(asset);
+#if UNITY_EDITOR
+            _bindingsDirty = true;
+#endif
+            InstallRuntimeBindings();
         }
 
         public void AddRuntimeObject(GameObject bindingObject)
@@ -327,6 +366,7 @@ namespace TLM.TimelineController
 
             var watchedIds = new HashSet<int>();
             watchedIds.Add(timelineAsset.GetInstanceID());
+            watchedIds.Add(playableDirector.gameObject.GetInstanceID());
             for (int i = 0; i < timelineAsset.outputTrackCount; i++)
             {
                 var track = timelineAsset.GetOutputTrack(i);
@@ -504,14 +544,14 @@ namespace TLM.TimelineController
                 bindingData.clipBindings.Add(new ClipBinding { trackKey = trackKey, clipIndex = clipIndex, id = id });
         }
 
-        // Wipes bindingData and re-captures from the current scene state from scratch.
-        public void ResetBindings()
+        // Adopts freshBindingData (already empty) as the active binding data and re-captures
+        // from the current scene state from scratch.
+        public void ResetBindings(TimelineBindingData freshBindingData)
         {
+            bindingData = freshBindingData;
             if (bindingData == null)
                 return;
 
-            bindingData.trackBindings.Clear();
-            bindingData.clipBindings.Clear();
             CaptureAndReconcile();
             InstallRuntimeBindings();
         }
@@ -541,7 +581,7 @@ namespace TLM.TimelineController
         }
 #endif
 
-        // Runtime-only: handles deferred reference discovery.
+        // Runtime-only: handles deferred reference discovery and external playableAsset swaps.
         void LateUpdate()
         {
 #if UNITY_EDITOR
@@ -554,6 +594,12 @@ namespace TLM.TimelineController
                 TimelineReference.RegisterAll();
                 InstallRuntimeBindings();
             }
+
+            var current = playableDirector.playableAsset;
+            if (current == _lastKnownAsset)
+                return;
+
+            SetTimeline(current as TimelineAsset, true);
         }
     }
 }
