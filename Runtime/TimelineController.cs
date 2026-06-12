@@ -198,17 +198,15 @@ namespace TLM.TimelineController
                     continue;
                 }
 
-                // MarkerTrack's GetGenericBinding can return a spurious non-null binding even
-                // when visually empty (see CLAUDE.md). Only skip it if it has no real output
-                // (e.g. a plain marker-only track) — a Signal Track is also a MarkerTrack but
-                // has a SignalReceiver output and must be captured/installed like any other track.
-                if (track is MarkerTrack)
-                {
-                    bool hasOutput = false;
-                    foreach (var _ in track.outputs) { hasOutput = true; break; }
-                    if (!hasOutput)
-                        continue;
-                }
+                // Abstract over track type: only tracks with a real output (i.e. something to
+                // bind) are tracked. This also covers MarkerTrack — GetGenericBinding can return
+                // a spurious non-null binding for a plain marker-only track (see CLAUDE.md), but
+                // a Signal Track (also a MarkerTrack) has a SignalReceiver output and is tracked
+                // like any other track.
+                bool hasOutput = false;
+                foreach (var _ in track.outputs) { hasOutput = true; break; }
+                if (!hasOutput)
+                    continue;
 
                 string trackType = track.GetType().Name;
                 var occKey = (groupPath, track.name, trackType);
@@ -238,7 +236,13 @@ namespace TLM.TimelineController
             if (!TimelineReference.IdMap.TryGetValue(id, out var instances))
                 return null;
 
-            return instances.Count == 0 ? null : instances[0];
+            foreach (var instance in instances)
+            {
+                if (instance != null)
+                    return instance;
+            }
+
+            return null;
         }
 
         bool BindTrack(PlayableDirector pd, TrackAsset trackAsset, string id)
@@ -250,8 +254,6 @@ namespace TLM.TimelineController
                 break;
             }
 
-            Debug.Log($"[TimelineController] BindTrack '{trackAsset.name}' ({trackAsset.GetType().Name}) outputType={outputType}");
-
             if (outputType == null)
                 return false;
 
@@ -262,10 +264,7 @@ namespace TLM.TimelineController
 
             GameObject bindTarget = GetBindTarget(id);
             if (bindTarget == null)
-            {
-                Debug.Log($"[TimelineController] BindTrack '{trackAsset.name}' bindTarget null for id {id}");
                 return false;
-            }
 
             if (bindTarget == gameObject)
                 return false;
@@ -273,8 +272,6 @@ namespace TLM.TimelineController
             UnityEngine.Object target = bindTarget;
             if (isComponent)
                 target = bindTarget.GetComponent(outputType);
-
-            Debug.Log($"[TimelineController] BindTrack '{trackAsset.name}' bindTarget={bindTarget.name} target={target}");
 
             var oldBinding = pd.GetGenericBinding(trackAsset);
             if (oldBinding != target)

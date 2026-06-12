@@ -44,6 +44,8 @@ namespace TLM.TimelineController
                 IdMap.Add(Id, instances);
             }
 
+            instances.RemoveAll(go => go == null);
+
             if (!instances.Contains(gameObject))
             {
                 instances.Add(gameObject);
