@@ -33,7 +33,6 @@ namespace TLM.TimelineController
         // Set by OnSceneStateChanged; cleared in Update/LateUpdate after sweep + install.
         bool _referencesDirty;
 #if UNITY_EDITOR
-        bool _bindingsDirty = true;
         // True from OnEnable until the deferred tryLoad completes — Update() must not run a
         // capture pass while true, the bindingData cross-asset reference may not be resolved yet.
         bool _pendingLoad;
@@ -42,8 +41,6 @@ namespace TLM.TimelineController
         [NonSerialized] public int InstallCount;
 
 #if UNITY_EDITOR
-        [NonSerialized]
-        public bool ActiveInScene;
         public List<TimelineAssetEntry> TimelineEntries => timelineEntries;
         public TimelineBindingData BindingData => bindingData;
 
@@ -72,10 +69,8 @@ namespace TLM.TimelineController
                 if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewSceneObject(this))
                     return;
 
-                ActiveInScene = true;
                 _pendingLoad = true;
                 playableDirector = GetComponent<PlayableDirector>();
-                ObjectChangeEvents.changesPublished += OnObjectChangesPublished;
                 TimelineReference.OnSceneStateChanged += OnReferencesChanged;
                 // playableAsset and the bindingData sub-asset reference inside timelineEntries
                 // are cross-asset references Unity resolves asynchronously after OnEnable.
@@ -91,7 +86,6 @@ namespace TLM.TimelineController
                     EditorApplication.delayCall -= tryLoad;
                     _lastKnownAsset = playableDirector.playableAsset;
                     bindingData = entry?.bindingData;
-                    _bindingsDirty = true;
                     TimelineReference.RegisterAll();
                     InstallRuntimeBindings();
                     _pendingLoad = false;
@@ -129,7 +123,6 @@ namespace TLM.TimelineController
 #if UNITY_EDITOR
             if (!Application.isPlaying)
             {
-                ObjectChangeEvents.changesPublished -= OnObjectChangesPublished;
                 TimelineReference.OnSceneStateChanged -= OnReferencesChanged;
             }
 #endif
@@ -158,9 +151,6 @@ namespace TLM.TimelineController
 
             _lastKnownAsset = asset;
             bindingData = FindBindingData(asset);
-#if UNITY_EDITOR
-            _bindingsDirty = true;
-#endif
             InstallRuntimeBindings();
         }
 
@@ -347,69 +337,6 @@ namespace TLM.TimelineController
         // ------------------------------------------------------------------
 
 #if UNITY_EDITOR
-        static void AddGroupTrackIds(IEnumerable<TrackAsset> tracks, HashSet<int> ids)
-        {
-            foreach (var track in tracks)
-            {
-                if (track is GroupTrack gt)
-                {
-                    ids.Add(gt.GetInstanceID());
-                    AddGroupTrackIds(gt.GetChildTracks(), ids);
-                }
-            }
-        }
-
-        void OnObjectChangesPublished(ref ObjectChangeEventStream stream)
-        {
-            var timelineAsset = playableDirector?.playableAsset as TimelineAsset;
-            if (timelineAsset == null) return;
-
-            var watchedIds = new HashSet<int>();
-            watchedIds.Add(timelineAsset.GetInstanceID());
-            watchedIds.Add(playableDirector.gameObject.GetInstanceID());
-            for (int i = 0; i < timelineAsset.outputTrackCount; i++)
-            {
-                var track = timelineAsset.GetOutputTrack(i);
-                if (track != null) watchedIds.Add(track.GetInstanceID());
-            }
-            AddGroupTrackIds(timelineAsset.GetRootTracks(), watchedIds);
-
-            for (int i = 0; i < stream.length; i++)
-            {
-                var kind = stream.GetEventType(i);
-                switch (kind)
-                {
-                    case ObjectChangeKind.ChangeGameObjectOrComponentProperties:
-                        stream.GetChangeGameObjectOrComponentPropertiesEvent(i, out var propEvent);
-                        if (watchedIds.Contains(propEvent.instanceId)) { _bindingsDirty = true; return; }
-                        break;
-                    case ObjectChangeKind.ChangeGameObjectStructureHierarchy:
-                        stream.GetChangeGameObjectStructureHierarchyEvent(i, out var hierEvent);
-                        if (watchedIds.Contains(hierEvent.instanceId)) { _bindingsDirty = true; return; }
-                        break;
-                    case ObjectChangeKind.DestroyGameObjectHierarchy:
-                        stream.GetDestroyGameObjectHierarchyEvent(i, out var destroyEvent);
-                        if (watchedIds.Contains(destroyEvent.instanceId)) { _bindingsDirty = true; return; }
-                        break;
-                    case ObjectChangeKind.DestroyAssetObject:
-                        stream.GetDestroyAssetObjectEvent(i, out var destroyAssetEvent);
-                        if (watchedIds.Contains(destroyAssetEvent.instanceId)) { _bindingsDirty = true; return; }
-                        break;
-                    case ObjectChangeKind.ChangeRootOrder:
-                        stream.GetChangeRootOrderEvent(i, out var rootOrderEvent);
-                        if (watchedIds.Contains(rootOrderEvent.instanceId)) { _bindingsDirty = true; return; }
-                        break;
-                    case ObjectChangeKind.ChangeAssetObjectProperties:
-                        stream.GetChangeAssetObjectPropertiesEvent(i, out var assetEvent);
-                        if (watchedIds.Contains(assetEvent.instanceId)) { _bindingsDirty = true; return; }
-                        break;
-                    case ObjectChangeKind.ChangeScene:
-                        _bindingsDirty = true;
-                        return;
-                }
-            }
-        }
-
         static bool IsChildOf(Transform child, Transform parent)
         {
             if (parent == null || child == null)
@@ -561,15 +488,10 @@ namespace TLM.TimelineController
             if (Application.isPlaying)
                 return;
 
-            if (!ActiveInScene)
-                return;
             if (_pendingLoad)
                 return;
-            if (_bindingsDirty)
-            {
-                _bindingsDirty = false;
-                CaptureAndReconcile();
-            }
+
+            CaptureAndReconcile();
 
             if (_referencesDirty)
             {
