@@ -31,86 +31,49 @@ namespace TLM.TimelineController
 
             EditorGUILayout.Space();
 
-            // --- Timeline entry navigator ---
-            EditorGUILayout.LabelField("Timeline Assets", EditorStyles.boldLabel);
-
-            var entries = timelineController.TimelineEntries;
+            var bindingData = timelineController.BindingData;
             var currentAsset = director.playableAsset as TimelineAsset;
 
-            for (int i = 0; i < entries.Count; i++)
+            if (bindingData == null)
             {
-                var entry = entries[i];
-                bool isActive = entry.timelineAsset == currentAsset;
-                string label = entry.timelineAsset != null ? entry.timelineAsset.name : "(none)";
-
-                EditorGUILayout.BeginHorizontal();
-
-                using (new EditorGUI.DisabledGroupScope(isActive))
+                EditorGUILayout.HelpBox("No Binding Data assigned.", MessageType.Warning);
+                if (GUILayout.Button("Create Binding Data"))
                 {
-                    if (GUILayout.Button(isActive ? $"[ {label} ]" : label))
+                    if (currentAsset == null)
                     {
-                        Undo.RecordObject(director, "Switch Timeline Asset");
-                        Undo.RecordObject(timelineController, "Switch Timeline Asset");
-                        timelineController.SetTimeline(entry.timelineAsset);
-                        EditorUtility.SetDirty(director);
+                        EditorUtility.DisplayDialog("No Asset", "Assign a TimelineAsset to the PlayableDirector first.", "OK");
+                    }
+                    else
+                    {
+                        Undo.RecordObject(timelineController, "Create Binding Data");
+                        var data = CreateBindingDataAsset(currentAsset);
+                        var so = serializedObject;
+                        so.Update();
+                        so.FindProperty("bindingData").objectReferenceValue = data;
+                        so.ApplyModifiedProperties();
                         EditorUtility.SetDirty(timelineController);
                     }
                 }
 
-                if (GUILayout.Button("✕", GUILayout.Width(22)))
-                {
-                    Undo.RecordObject(timelineController, "Remove Timeline Entry");
-                    entries.RemoveAt(i);
-                    EditorUtility.SetDirty(timelineController);
-                    break;
-                }
-
-                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.Space();
+                using (new EditorGUI.DisabledGroupScope(true))
+                    base.OnInspectorGUI();
+                return;
             }
-
-            EditorGUILayout.Space();
-
-            // --- Add entry from current director asset ---
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Add Current Asset"))
-            {
-                var asset = director.playableAsset as TimelineAsset;
-                if (asset == null)
-                {
-                    EditorUtility.DisplayDialog("No Asset", "Assign a TimelineAsset to the PlayableDirector first.", "OK");
-                }
-                else if (entries.Exists(e => e.timelineAsset == asset))
-                {
-                    EditorUtility.DisplayDialog("Already Added", $"{asset.name} is already in the list.", "OK");
-                }
-                else
-                {
-                    Undo.RecordObject(timelineController, "Add Timeline Entry");
-                    var bindingData = CreateBindingDataAsset(asset);
-                    entries.Add(new TimelineAssetEntry { timelineAsset = asset, bindingData = bindingData });
-                    EditorUtility.SetDirty(timelineController);
-                }
-            }
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.Space();
 
             // --- Reset bindings ---
             var prevColor = GUI.backgroundColor;
             GUI.backgroundColor = new Color(1f, 0.35f, 0.35f);
-            if (GUILayout.Button("Reset Bindings for Current Timeline"))
+            if (GUILayout.Button("Reset Bindings"))
             {
                 GUI.backgroundColor = prevColor;
-                var asset = director.playableAsset as TimelineAsset;
-                string assetName = asset != null ? asset.name : "(none)";
                 if (EditorUtility.DisplayDialog(
                     "Reset Bindings",
-                    $"This will destroy ALL existing BindingData assets for \"{assetName}\", create a fresh one, and re-capture bindings from the current scene state. Stale entries will be discarded.\n\nThis cannot be undone.",
+                    "This will clear all stored bindings and re-capture from the current scene state. Stale entries will be discarded.\n\nThis cannot be undone.",
                     "Reset", "Cancel"))
                 {
                     Undo.RecordObject(timelineController, "Reset Timeline Bindings");
-                    var freshData = asset != null ? RebuildBindingDataAsset(asset) : null;
-                    timelineController.ResetActiveBindings(freshData);
+                    timelineController.ResetBindings();
                 }
             }
             GUI.backgroundColor = prevColor;
@@ -127,59 +90,31 @@ namespace TLM.TimelineController
 
             EditorGUILayout.Space();
 
-            // --- SO contents (ground truth) — green if confirmed (resolved by
-            // InstallRuntimeBindings this session), red if not yet confirmed. ---
-            var confirmedIds = timelineController.ConfirmedBindingIds;
-            var activeEntry = entries.Find(e => e.timelineAsset == currentAsset);
-            var activeBindingData = activeEntry?.bindingData;
-            // entry.bindingData can be an unresolved cross-asset reference even though the
-            // sub-asset exists in the .playable file (see CLAUDE.md async-resolve note) —
-            // fall back to loading it directly from the asset for display purposes.
-            if (activeBindingData == null && activeEntry?.timelineAsset != null)
+            // --- SO contents (ground truth) — green if the binding currently resolves to a
+            // live object, red if its key exists but the target doesn't resolve right now
+            // (could be unloaded, or genuinely missing). ---
+            EditorGUILayout.LabelField("Track Bindings", EditorStyles.boldLabel);
+            if (bindingData.trackBindings.Count == 0)
             {
-                var path = AssetDatabase.GetAssetPath(activeEntry.timelineAsset);
-                activeBindingData = AssetDatabase.LoadAllAssetsAtPath(path).OfType<TimelineBindingData>().FirstOrDefault();
-            }
-            var soTrackBindings = activeBindingData?.trackBindings;
-            var soNestedBindings = activeBindingData?.nestedTimelineBindings;
-
-            EditorGUILayout.LabelField("Track Bindings (from SO)", EditorStyles.boldLabel);
-            if (soTrackBindings == null || soTrackBindings.Count == 0)
-            {
-                EditorGUILayout.HelpBox("No bindings in SO.", MessageType.None);
+                EditorGUILayout.HelpBox("No track bindings.", MessageType.None);
             }
             else
             {
-                foreach (var b in soTrackBindings)
-                    DrawBindingRow($"  track {b.trackIndex}", b.id, confirmedIds.Contains(b.id));
-            }
-
-            if (soNestedBindings != null && soNestedBindings.Count > 0)
-            {
-                EditorGUILayout.LabelField("Clip Bindings (from SO)", EditorStyles.boldLabel);
-                foreach (var nb in soNestedBindings)
-                    DrawBindingRow($"  track {nb.trackIndex} clip {nb.clipIndex}", nb.id, confirmedIds.Contains(nb.id));
-            }
-
-            // --- Binding change status ---
-            EditorGUILayout.Space();
-            const double recentWindow = 2.0;
-            double timeSinceDiff = EditorApplication.timeSinceStartup - timelineController.LastDiffTime;
-            bool recentlyUpdated = timelineController.LastDiffTime >= 0 && timeSinceDiff < recentWindow;
-
-            if (recentlyUpdated)
-            {
-                EditorGUILayout.HelpBox("Change detected, updated SO", MessageType.Info);
-                var lastDiff = timelineController.LastDiffSummary;
-                using (new EditorGUI.DisabledGroupScope(true))
+                foreach (var b in bindingData.trackBindings)
                 {
-                    foreach (var line in lastDiff)
-                        EditorGUILayout.LabelField($"  {line}");
+                    bool resolved = TimelineReference.IdMap.TryGetValue(b.id, out var instances) && instances.Count > 0;
+                    DrawBindingRow($"  {DescribeKey(b.key)}", b.id, resolved);
                 }
             }
-            else
+
+            if (bindingData.clipBindings.Count > 0)
             {
-                EditorGUILayout.HelpBox("Bindings locked — listening for binding changes...", MessageType.None);
+                EditorGUILayout.LabelField("Clip Bindings", EditorStyles.boldLabel);
+                foreach (var cb in bindingData.clipBindings)
+                {
+                    bool resolved = TimelineReference.IdMap.TryGetValue(cb.id, out var instances) && instances.Count > 0;
+                    DrawBindingRow($"  {DescribeKey(cb.trackKey)} clip {cb.clipIndex}", cb.id, resolved);
+                }
             }
 
             EditorGUILayout.Space();
@@ -187,29 +122,31 @@ namespace TLM.TimelineController
                 base.OnInspectorGUI();
         }
 
-        // Confirmed = resolved by InstallRuntimeBindings at least once this session, so it's
-        // eligible for SO diff/write. Unconfirmed entries (target scene not loaded yet) are
-        // preserved as-is and shown in red. Baked into GUIStyle.normal/onNormal because
-        // GUI.contentColor is overridden by the skin while GUI.enabled is false.
-        static readonly Color ConfirmedColor = new Color(0.4f, 1f, 0.4f);
-        static readonly Color UnconfirmedColor = new Color(1f, 0.35f, 0.35f);
-        static GUIStyle _confirmedStyle;
-        static GUIStyle _unconfirmedStyle;
-
-        static void DrawBindingRow(string label, string id, bool confirmed)
+        static string DescribeKey(TrackKey key)
         {
-            if (_confirmedStyle == null)
-            {
-                _confirmedStyle = new GUIStyle(EditorStyles.label);
-                _confirmedStyle.normal.textColor = ConfirmedColor;
-                _confirmedStyle.onNormal.textColor = ConfirmedColor;
+            string path = string.IsNullOrEmpty(key.groupPath) ? key.trackName : $"{key.groupPath}/{key.trackName}";
+            return key.occurrence == 0 ? path : $"{path} #{key.occurrence}";
+        }
 
-                _unconfirmedStyle = new GUIStyle(EditorStyles.label);
-                _unconfirmedStyle.normal.textColor = UnconfirmedColor;
-                _unconfirmedStyle.onNormal.textColor = UnconfirmedColor;
+        static readonly Color ResolvedColor = new Color(0.4f, 1f, 0.4f);
+        static readonly Color UnresolvedColor = new Color(1f, 0.35f, 0.35f);
+        static GUIStyle _resolvedStyle;
+        static GUIStyle _unresolvedStyle;
+
+        static void DrawBindingRow(string label, string id, bool resolved)
+        {
+            if (_resolvedStyle == null)
+            {
+                _resolvedStyle = new GUIStyle(EditorStyles.label);
+                _resolvedStyle.normal.textColor = ResolvedColor;
+                _resolvedStyle.onNormal.textColor = ResolvedColor;
+
+                _unresolvedStyle = new GUIStyle(EditorStyles.label);
+                _unresolvedStyle.normal.textColor = UnresolvedColor;
+                _unresolvedStyle.onNormal.textColor = UnresolvedColor;
             }
 
-            var style = confirmed ? _confirmedStyle : _unconfirmedStyle;
+            var style = resolved ? _resolvedStyle : _unresolvedStyle;
             EditorGUILayout.LabelField(label, id, style);
         }
 
@@ -224,19 +161,6 @@ namespace TLM.TimelineController
             // ImportAsset can reload/reinstantiate sub-assets, invalidating `data` — re-fetch
             // the persisted instance so the reference we return/assign is the live one.
             return AssetDatabase.LoadAllAssetsAtPath(path).OfType<TimelineBindingData>().FirstOrDefault(d => d.name == "BindingData");
-        }
-
-        // Destroys all existing TimelineBindingData sub-assets inside the .playable file,
-        // then creates and returns a single fresh one.
-        static TimelineBindingData RebuildBindingDataAsset(TimelineAsset timelineAsset)
-        {
-            var path = AssetDatabase.GetAssetPath(timelineAsset);
-            foreach (var bd in AssetDatabase.LoadAllAssetsAtPath(path).OfType<TimelineBindingData>().ToList())
-            {
-                AssetDatabase.RemoveObjectFromAsset(bd);
-                DestroyImmediate(bd, true);
-            }
-            return CreateBindingDataAsset(timelineAsset);
         }
     }
 }
